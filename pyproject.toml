@@ -1,0 +1,21 @@
+[project]
+name = "xcorecli"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "rich>=14.3.4",
+    "typer>=0.25.1",
+    "xcore",
+    "pyyaml>=6.0.1",
+]
+
+tool.uv.package = true
+
+[project.scripts]
+xcli = "xcli.init.cli:app"
+
+[tool.uv.sources]
+xcore = { git = "https://www.github.com/traoreera/xcore.git" }
+
