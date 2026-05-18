@@ -1584,8 +1584,9 @@ dependencies = [
 [[package]]
 name = "xcorecli"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
+    { name = "psutil" },
     { name = "pyyaml" },
     { name = "rich" },
     { name = "typer" },
@@ -1594,6 +1595,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "psutil", specifier = ">=5.9" },
     { name = "pyyaml", specifier = ">=6.0.1" },
     { name = "rich", specifier = ">=14.3.4" },
     { name = "typer", specifier = ">=0.25.1" },
