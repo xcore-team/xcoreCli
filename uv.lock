@@ -1586,18 +1586,22 @@ name = "xcorecli"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "alembic" },
     { name = "psutil" },
     { name = "pyyaml" },
     { name = "rich" },
+    { name = "sqlalchemy" },
     { name = "typer" },
     { name = "xcore" },
 ]
 
 [package.metadata]
 requires-dist = [
+    { name = "alembic", specifier = ">=1.18.0" },
     { name = "psutil", specifier = ">=5.9" },
     { name = "pyyaml", specifier = ">=6.0.1" },
     { name = "rich", specifier = ">=14.3.4" },
+    { name = "sqlalchemy", specifier = ">=2.0.0" },
     { name = "typer", specifier = ">=0.25.1" },
     { name = "xcore", git = "https://www.github.com/traoreera/xcore.git" },
 ]

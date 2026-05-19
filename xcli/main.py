@@ -4,6 +4,7 @@ from xcli._run import ns, run
 from xcli.init.manager import _app as _init_wizard
 from xcli.init.upgrade import run_upgrade as _run_upgrade
 from xcli.manager.cli import app as manager_app
+from xcli.migrations.cli import app as migrations_app
 from xcli.plugin.cli import app as plugin_app
 from xcli.sandbox.cli import app as sandbox_app
 from xcli.worker.cli import app as worker_app
@@ -53,9 +54,11 @@ app.add_typer(plugin_app,  name="plugin")
 app.add_typer(sandbox_app, name="sandbox")
 app.add_typer(worker_app,  name="worker")
 app.add_typer(manager_app, name="manager")
+app.add_typer(migrations_app, name="migration")
 
 # ── short aliases (hidden) ────────────────────────────────────
 app.add_typer(plugin_app,  name="p",  hidden=True)
 app.add_typer(sandbox_app, name="sb", hidden=True)
 app.add_typer(worker_app,  name="w",  hidden=True)
 app.add_typer(manager_app, name="m",  hidden=True)
+app.add_typer(migrations_app, name="mig", hidden=True)

@@ -21,7 +21,7 @@ def start(
     hostname: Optional[str] = typer.Option(None, "-n"),
 ) -> None:
     """Start FastAPI and/or Celery worker."""
-    from xcore.cli.worker_cmd import handle_worker
+    from .worker import handle_worker
     handle_worker(ns(
         worker_subcommand="start",
         target=target,
