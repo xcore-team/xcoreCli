@@ -1,6 +1,10 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
 name = "xcorecli"
-version = "0.1.0"
+version = "1.0.0"
 description = "CLI for xcore — configuration, plugins, deployment"
 readme = "README.md"
 requires-python = ">=3.12,<4.0"
@@ -9,16 +13,16 @@ dependencies = [
     "rich>=14.3.4",
     "sqlalchemy>=2.0.0",
     "typer>=0.25.1",
-    "xcore",
     "pyyaml>=6.0.1",
     "psutil>=5.9",
 ]
 
 [project.scripts]
+xcore-cli = "xcli.main:app"
 xcli = "xcli.main:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["xcli"]
 
 [tool.uv]
 package = true
-
-[tool.uv.sources]
-xcore = { git = "https://github.com/traoreera/xcore.git" }
