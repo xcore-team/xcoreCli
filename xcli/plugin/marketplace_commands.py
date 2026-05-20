@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 import typer
 from typer import Typer
@@ -15,7 +16,39 @@ def _client():
     return MarketplaceClient(ConfigLoader.load(None))
 
 
-def _table(plugins: list[dict], title: str) -> None:
+def _normalize_plugins(payload: Any) -> list[dict[str, Any]]:
+    if payload is None:
+        return []
+    if isinstance(payload, list):
+        items = payload
+    elif isinstance(payload, dict):
+        for key in ('items', 'plugins', 'results', 'data'):
+            value = payload.get(key)
+            if isinstance(value, list):
+                items = value
+                break
+        else:
+            items = [payload]
+    else:
+        items = [payload]
+
+    normalized: list[dict[str, Any]] = []
+    for item in items:
+        if isinstance(item, dict):
+            normalized.append(item)
+        else:
+            normalized.append(
+                {
+                    'name': str(item),
+                    'version': '?',
+                    'author': '—',
+                    'description': '',
+                }
+            )
+    return normalized
+
+
+def _table(plugins: list[dict[str, Any]], title: str) -> None:
     from rich.table import Table
 
     table = Table(title=title)
@@ -25,10 +58,10 @@ def _table(plugins: list[dict], title: str) -> None:
     table.add_column('Description')
     for plugin in plugins:
         table.add_row(
-            plugin.get('name') or plugin.get('slug', '?'),
-            plugin.get('version', '?'),
-            plugin.get('author', '—'),
-            plugin.get('description', ''),
+            str(plugin.get('name') or plugin.get('slug', '?')),
+            str(plugin.get('version', '?')),
+            str(plugin.get('author', '—')),
+            str(plugin.get('description', '')),
         )
     console.print(table)
 
@@ -38,7 +71,7 @@ def register(app: Typer) -> None:
     def browse() -> None:
         """List all plugins available on the marketplace."""
         with console.status('Fetching marketplace plugins...'):
-            plugins = asyncio.run(_client().list_plugins())
+            plugins = _normalize_plugins(asyncio.run(_client().list_plugins()))
         if not plugins:
             console.print('[yellow]No plugins found on marketplace.[/yellow]')
             return
@@ -48,7 +81,7 @@ def register(app: Typer) -> None:
     def trending() -> None:
         """Show trending plugins on the marketplace."""
         with console.status('Fetching trending plugins...'):
-            plugins = asyncio.run(_client().trending())
+            plugins = _normalize_plugins(asyncio.run(_client().trending()))
         if not plugins:
             console.print('[yellow]No trending plugins.[/yellow]')
             return
@@ -58,7 +91,7 @@ def register(app: Typer) -> None:
     def search(query: str) -> None:
         """Search the marketplace for a plugin."""
         with console.status(f"Searching for '[cyan]{query}[/cyan]'..."):
-            results = asyncio.run(_client().search(query))
+            results = _normalize_plugins(asyncio.run(_client().search(query)))
         if not results:
             console.print(f"[yellow]No results for '[cyan]{query}[/cyan]'.[/yellow]")
             return
