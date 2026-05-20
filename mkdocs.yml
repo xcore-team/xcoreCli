@@ -1,0 +1,80 @@
+site_name: xcli
+site_description: CLI officielle pour le framework xcore
+site_url: https://docs.xcorehub.dev
+repo_url: https://github.com/xcorehub/xcoreCli
+repo_name: xcorehub/xcoreCli
+
+theme:
+  name: material
+  language: fr
+  palette:
+    scheme: slate
+    primary: cyan
+    accent: amber
+  font:
+    text: Inter
+    code: JetBrains Mono
+  icon:
+    repo: fontawesome/brands/github
+  features:
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - navigation.footer
+    - search.highlight
+    - search.suggest
+    - content.code.copy
+    - content.code.annotate
+    - toc.follow
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+
+nav:
+  - Accueil: index.md
+  - Démarrage:
+    - Installation: getting-started/install.md
+    - Authentification: getting-started/auth.md
+    - Configuration: getting-started/configuration.md
+  - Commandes globales:
+    - init & upgrade: commands/init.md
+    - health & services: commands/health.md
+  - config:
+    - config/index.md
+  - plugin:
+    - Vue d'ensemble: plugin/index.md
+    - Gestion locale: plugin/local.md
+    - Installation: plugin/install.md
+    - Runtime: plugin/runtime.md
+    - Marketplace: plugin/marketplace.md
+    - Sécurité: plugin/security.md
+    - Mises à jour: plugin/update.md
+  - sandbox:
+    - sandbox/index.md
+  - manager:
+    - Vue d'ensemble: manager/index.md
+    - Processus: manager/process.md
+    - Monitoring: manager/monitoring.md
+    - Services: manager/services.md
+  - migration:
+    - migration/index.md
+  - Référence: reference.md

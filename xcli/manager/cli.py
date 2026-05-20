@@ -37,27 +37,26 @@ err = Console(stderr=True)
 
 # ── config helpers ────────────────────────────────────────────
 
+from xcli.config.runtime import load_raw_config, observability_log_file, plugins_directory
+
+
 def _raw_cfg() -> dict:
-    from xcli._xcore import load_raw_config
     return load_raw_config()
 
 
 def _log_file() -> Path:
-    cfg = _raw_cfg()
-    p = cfg.get("observability", {}).get("logging", {}).get("file", "log/app.log")
-    return Path(p)
+    return observability_log_file()
 
 
 def _plugins_root() -> Path:
-    cfg = _raw_cfg()
-    return Path(cfg.get("plugins", {}).get("directory", "./app"))
+    return plugins_directory()
 
 
 def _plugin_names() -> list[str]:
-    d = _plugins_root()
-    if not d.exists():
+    directory = _plugins_root()
+    if not directory.exists():
         return []
-    return sorted(p.name for p in d.iterdir() if p.is_dir() and not p.name.startswith("_"))
+    return sorted(p.name for p in directory.iterdir() if p.is_dir() and not p.name.startswith('_'))
 
 
 # ── logs ──────────────────────────────────────────────────────

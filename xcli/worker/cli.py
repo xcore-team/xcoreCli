@@ -54,7 +54,7 @@ def stop(
 @app.command("status")
 def status() -> None:
     """Show process status."""
-    from xcore.cli.worker_cmd import handle_worker
+    from .worker import handle_worker
 
     handle_worker(ns(worker_subcommand="status", json=False))
 
@@ -66,7 +66,7 @@ def logs(
     follow: bool = typer.Option(False, "--follow", "-f"),
 ) -> None:
     """Show process logs."""
-    from xcore.cli.worker_cmd import handle_worker
+    from .worker import handle_worker
 
     handle_worker(
         ns(worker_subcommand="logs", target=target, lines=lines, follow=follow)
