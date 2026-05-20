@@ -7,7 +7,7 @@ name = "xcorecli"
 version = "1.0.1"
 description = "CLI for xcore — configuration, plugins, deployment"
 readme = "README.md"
-requires-python = ">=3.12,<4.0"
+requires-python = ">=3.12"
 dependencies = [
     "alembic>=1.18.0",
     "rich>=14.3.4",
