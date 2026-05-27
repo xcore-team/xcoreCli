@@ -88,17 +88,19 @@ auto-security: ## Audit sécurité (Bandit) avec rapports dans REPORT_DIR
 	@echo "[INFO] - $(REPORT_DIR)/security-bandit.txt"
 	@echo "[INFO] - $(REPORT_DIR)/security-bandit.stderr.log"
 
-auto-docs: ## Build docs Sphinx HTML
-	@mkdir -p "$(CURDIR)/docs/_build/html"
-	@echo "[INFO] Build docs Sphinx"
-	@poetry run sphinx-build -b html "$(CURDIR)/docs" "$(CURDIR)/docs/_build/html" || { \
+auto-docs: ## Build docs MkDocs HTML
+	@echo "[INFO] Build docs MkDocs"
+	@poetry run mkdocs build || { \
 		if [ "$(STRICT)" = "1" ]; then \
 			echo "[ERR ] Echec build docs"; exit 1; \
 		else \
 			echo "[WARN] Echec ignoré (STRICT=0): build docs"; \
 		fi; \
 	}
-	@echo "[INFO] Documentation HTML: $(CURDIR)/docs/_build/html/index.html"
+	@echo "[INFO] Documentation HTML: $(CURDIR)/site/index.html"
+
+docs-serve: ## Lancer le serveur de doc MkDocs (live reload)
+	@poetry run mkdocs serve
 
 auto-all: auto-setup auto-tests auto-security auto-docs ## Exécuter toute la chaîne auto
 

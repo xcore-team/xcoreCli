@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Optional
 
 import typer
 import yaml
-from rich.prompt import Confirm
 from rich.table import Table
 from typer import Typer
 
@@ -12,13 +12,12 @@ from .install_commands import _install_from_url
 from .shared import console, plugins_dir
 
 
-
-
 def _marketplace_client():
     from xcore.configurations.loader import ConfigLoader
     from xcore.marketplace import MarketplaceClient
 
     return MarketplaceClient(ConfigLoader.load(None))
+
 
 def _installed_version(name: str) -> str | None:
     manifest_path = plugins_dir() / name / 'plugin.yaml'
@@ -31,13 +30,24 @@ def _installed_version(name: str) -> str | None:
         return None
 
 
-def _do_update(name: str, target_version: str | None) -> None:
+def _fetch_latest(client, name: str) -> tuple[str | None, str | None, str | None]:
+    """Returns (version, download_url, source_type) from marketplace."""
+    async def _get():
+        data = await client.get_plugin(name)
+        if not data:
+            return None, None, None
+        return data.get('version'), data.get('download_url'), data.get('source_type', 'zip')
+
+    return asyncio.run(_get())
+
+
+def _do_update(name: str, target_version: str | None, dry_run: bool) -> None:
     import shutil
 
     current = _installed_version(name)
     client = _marketplace_client()
 
-    async def _resolve() -> tuple[str, str, str]:
+    async def _resolve() -> tuple[str | None, str | None, str]:
         if target_version and target_version != 'latest':
             versions = await client.get_versions(name)
             match = next((item for item in versions if item.get('version') == target_version), None)
@@ -53,8 +63,13 @@ def _do_update(name: str, target_version: str | None) -> None:
         return data.get('download_url'), data.get('source_type', 'zip'), data.get('version', 'latest')
 
     url, source_type, resolved_version = asyncio.run(_resolve())
+
     if current == resolved_version:
-        console.print(f'[green]{name} already at {resolved_version}.[/green]')
+        console.print(f'[green]{name}[/green] already at [magenta]{resolved_version}[/magenta].')
+        return
+
+    console.print(f'  [cyan]{name}[/cyan]: [dim]{current}[/dim] → [magenta]{resolved_version}[/magenta]')
+    if dry_run:
         return
 
     plugin_path = plugins_dir() / name
@@ -65,33 +80,30 @@ def _do_update(name: str, target_version: str | None) -> None:
 
 
 def register(app: Typer) -> None:
-    @app.command('update')
-    def update(name: str, version: str = typer.Argument('latest')) -> None:
-        """Update a single plugin from the marketplace."""
-        _do_update(name, version)
 
-    @app.command('update-all')
-    def update_all(check: bool = typer.Option(False, '--check', help='Only check for available updates.')) -> None:
-        """Check for and apply updates for all installed plugins."""
-        names = sorted(item.name for item in plugins_dir().iterdir() if item.is_dir() and not item.name.startswith('_'))
+    @app.command('check')
+    def check() -> None:
+        """Check all installed plugins for available updates."""
+        names = sorted(
+            item.name for item in plugins_dir().iterdir()
+            if item.is_dir() and not item.name.startswith('_')
+        )
         if not names:
             console.print('[yellow]No installed plugins found.[/yellow]')
             return
 
         client = _marketplace_client()
 
-        async def _fetch_all() -> list[tuple[str, str | None, str | None, str | None, str | None]]:
+        async def _fetch_all() -> list[tuple[str, str | None, str | None]]:
             results = []
-            for plugin_name in names:
-                current = _installed_version(plugin_name)
+            for pname in names:
+                current = _installed_version(pname)
                 try:
-                    data = await client.get_plugin(plugin_name)
+                    data = await client.get_plugin(pname)
                     latest = data.get('version', '?') if data else None
-                    url = data.get('download_url') if data else None
-                    src = data.get('source_type', 'zip') if data else None
                 except Exception:
-                    latest = url = src = None
-                results.append((plugin_name, current, latest, url, src))
+                    latest = None
+                results.append((pname, current, latest))
             return results
 
         with console.status('Checking marketplace for updates...'):
@@ -103,30 +115,54 @@ def register(app: Typer) -> None:
         table.add_column('Latest', style='magenta')
         table.add_column('Status', justify='center')
 
-        upgradable: list[tuple[str, str | None, str | None, str | None, str | None]] = []
-        for plugin_name, current, latest, url, src in results:
+        update_count = 0
+        for pname, current, latest in results:
             if latest is None:
                 status = '[dim]not on marketplace[/dim]'
             elif current == latest:
                 status = '[green]up to date[/green]'
             else:
                 status = '[yellow]update available[/yellow]'
-                upgradable.append((plugin_name, current, latest, url, src))
-            table.add_row(plugin_name, current or '?', latest or '—', status)
+                update_count += 1
+            table.add_row(pname, current or '?', latest or '—', status)
 
         console.print(table)
-        if not upgradable:
+        if update_count:
+            console.print(f'\n[yellow]{update_count} update(s) available.[/yellow] Run [cyan]xcli plugin update --all[/cyan] to apply.')
+        else:
             console.print('\n[green]All plugins are up to date.[/green]')
-            return
-        if check:
-            console.print(f'\n[yellow]{len(upgradable)} update(s) available.[/yellow] Run without [dim]--check[/dim] to apply.')
-            return
-        names_str = ', '.join(f'[cyan]{plugin_name}[/cyan]' for plugin_name, *_ in upgradable)
-        if not Confirm.ask(f'\nUpdate {names_str}?', default=True):
-            return
 
-        for plugin_name, current, latest, url, src in upgradable:
-            console.print(f'\nUpdating [cyan]{plugin_name}[/cyan]: [dim]{current}[/dim] → [magenta]{latest}[/magenta]')
-            assert url is not None and src is not None
-            _install_from_url(plugin_name, url, src)
-            console.print(f'[green]✓[/green] {plugin_name} updated.')
+    @app.command('apply')
+    def apply(
+        name: Optional[str] = typer.Argument(None, help='Plugin name to update (omit to use --all)'),
+        all_plugins: bool = typer.Option(False, '--all', help='Update all installed plugins'),
+        version: Optional[str] = typer.Option(None, '--version', help='Target a specific version'),
+        dry_run: bool = typer.Option(False, '--dry-run', help='Show what would be updated without applying'),
+    ) -> None:
+        """Update one plugin or all plugins from the marketplace.
+
+        Examples:
+            xcli plugin update apply my-plugin
+            xcli plugin update apply my-plugin --version 1.2.3
+            xcli plugin update apply --all
+            xcli plugin update apply --all --dry-run
+        """
+        if not name and not all_plugins:
+            console.print('[red]Provide a plugin name or use --all.[/red]')
+            raise typer.Exit(1)
+
+        if dry_run:
+            console.print('[dim]Dry run — no changes will be made.[/dim]\n')
+
+        if all_plugins:
+            names = sorted(
+                item.name for item in plugins_dir().iterdir()
+                if item.is_dir() and not item.name.startswith('_')
+            )
+            if not names:
+                console.print('[yellow]No installed plugins found.[/yellow]')
+                return
+            for pname in names:
+                _do_update(pname, version, dry_run)
+        else:
+            _do_update(name, version, dry_run)

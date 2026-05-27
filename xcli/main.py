@@ -10,7 +10,7 @@ from typer import Typer
 from xcli._run import ns, run
 
 _console = Console()
-from xcli.init.manager import _app as _init_wizard
+from xcli.init.manager import _DB_URLS, create_project
 from xcli.init.upgrade import run_upgrade as _run_upgrade
 from xcli.config.cli import app as config_app
 from xcli.manager.cli import app as manager_app
@@ -27,9 +27,43 @@ app = Typer(help="xcli — xcore project manager.", context_settings=_CTX)
 # ── init ──────────────────────────────────────────────────────
 
 @app.command()
-def init() -> None:
-    """Generate integration.yaml for a new xcore project."""
-    _init_wizard()
+def init(
+    name: str = typer.Argument(..., help="Nom du projet"),
+    env: str = typer.Option("development", "--env", "-e", help="development | production"),
+    db: str = typer.Option("sqlite", "--db", help=f"Type de DB : {', '.join(_DB_URLS)}"),
+    db_url: str = typer.Option(None, "--db-url", help="URL de connexion (auto si omis)"),
+    plugins_dir: str = typer.Option("./app", "--plugins-dir", "-p", help="Répertoire des plugins"),
+    output: str = typer.Option(None, "--output", "-o", help="Répertoire de sortie (défaut: ./<name>)"),
+) -> None:
+    """Crée un projet xcore complet (integration.yaml, main.py, structure)."""
+    if db not in _DB_URLS:
+        _console.print(f"[red]Type de DB inconnu :[/red] {db}. Valeurs : {', '.join(_DB_URLS)}")
+        raise typer.Exit(1)
+
+    root = create_project(
+        name,
+        env=env,
+        db_type=db,
+        db_url=db_url,
+        plugins_dir=plugins_dir,
+        output_dir=output,
+    )
+
+    plugins_rel = plugins_dir.lstrip("./")
+    _console.print(f"\n[green]✓[/green] Projet [cyan]{name}[/cyan] créé dans [dim]{root}[/dim]\n")
+    _console.print(f"  [dim]├──[/dim] integration.yaml")
+    _console.print(f"  [dim]├──[/dim] main.py")
+    _console.print(f"  [dim]├──[/dim] requirements.txt")
+    _console.print(f"  [dim]├──[/dim] .env")
+    _console.print(f"  [dim]├──[/dim] .gitignore")
+    _console.print(f"  [dim]├──[/dim] README.md")
+    _console.print(f"  [dim]├──[/dim] {plugins_rel}/")
+    _console.print(f"  [dim]└──[/dim] log/")
+    _console.print(f"\n[dim]Étapes suivantes :[/dim]")
+    _console.print(f"  cd {root.name}")
+    _console.print(f"  pip install -r requirements.txt")
+    _console.print(f"  [cyan]xcli plugin new <nom>[/cyan]")
+    _console.print(f"  [cyan]xcli manager start --reload[/cyan]")
 
 
 # ── upgrade ───────────────────────────────────────────────────

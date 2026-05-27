@@ -1,13 +1,24 @@
+from __future__ import annotations
+
+import secrets
 from pathlib import Path
 
 from rich.console import Console
-from rich.prompt import Prompt
 
 console = Console()
 
-# ── YAML template (comments preserved) ───────────────────────
+# ── DB defaults ───────────────────────────────────────────────
 
-_TEMPLATE = """\
+_DB_URLS: dict[str, str] = {
+    "sqlite":     "sqlite+aiosqlite:///./xcore.db",
+    "postgresql": "postgresql+asyncpg://user:pass@localhost:5432/dbname",
+    "mysql":      "mysql+aiomysql://user:pass@localhost:3306/dbname",
+    "mariadb":    "mysql+aiomysql://user:pass@localhost:3306/dbname",
+}
+
+# ── File templates ────────────────────────────────────────────
+
+_INTEGRATION_YAML = """\
 app:
   name: {name}
   env: {env}
@@ -93,49 +104,168 @@ security:
     - asyncio
     - logging
     - uuid
+    - pydantic
   forbidden_imports: []
   rate_limit_default:
     calls: 100
     period_seconds: 60
+
+marketplace:
+  url: "https://marketplace.xcore.dev"
+  api_url: "https://api.xcorehub.dev"
+  timeout: 10
+  cache_ttl: 300
 """
 
-_DB_URL_DEFAULTS = {
-    "sqlite":     "sqlite:///./xcore.db",
-    "sqlasync":   "sqlite+aiosqlite:///./xcore.db",
-    "postgresql": "postgresql+asyncpg://user:pass@localhost:5432/dbname",
-    "mysql":      "mysql+aiomysql://user:pass@localhost:3306/dbname",
-    "mongodb":    "mongodb://localhost:27017",
-    "redis":      "redis://localhost:6379/0",
-}
+_MAIN_PY = """\
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+from xcore import Xcore
+
+xcore = Xcore(config_path="integration.yaml")
 
 
-def _app() -> None:
-    console.print("\n[bold]xcli init[/bold]  [dim]— Enter to keep defaults[/dim]\n")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await xcore.boot(app)
+    yield
+    await xcore.shutdown()
 
-    name       = Prompt.ask("App name",      default="xcore-app")
-    env        = Prompt.ask("Environment",   choices=["development", "production"], default="development")
-    secret_key = Prompt.ask("Secret key",    default="change-me-in-production", password=True)
-    server_key = Prompt.ask("Server key",    default="change-me-in-production", password=True)
-    db_type    = Prompt.ask("Database type", choices=list(_DB_URL_DEFAULTS), default="sqlasync")
-    db_url     = Prompt.ask("Database URL",  default=_DB_URL_DEFAULTS[db_type])
-    plugins_dir = Prompt.ask("Plugins dir",  default="./app")
 
-    is_dev  = env == "development"
-    content = _TEMPLATE.format(
+app = FastAPI(
+    title="{name}",
+    version="0.1.0",
+    lifespan=lifespan,
+)
+
+
+@app.get("/health")
+async def health():
+    return {{"status": "ok"}}
+"""
+
+_GITIGNORE = """\
+__pycache__/
+*.py[cod]
+*.egg-info/
+.env
+.venv/
+venv/
+dist/
+build/
+*.db
+*.sqlite3
+log/
+.DS_Store
+"""
+
+_REQUIREMENTS = """\
+xcore
+fastapi
+uvicorn[standard]
+sqlalchemy
+aiosqlite
+pydantic
+"""
+
+_DOTENV = """\
+SECRET_KEY={secret_key}
+SERVER_KEY={server_key}
+DATABASE_URL={db_url}
+"""
+
+_README = """\
+# {name}
+
+Projet xcore généré avec `xcli init`.
+
+## Démarrage
+
+```bash
+pip install -r requirements.txt
+xcli manager start --reload
+```
+
+## Endpoints
+
+- API docs : http://localhost:8000/docs
+- Health   : http://localhost:8000/health
+
+## Commandes utiles
+
+```bash
+xcli plugin new <nom>        # Créer un plugin
+xcli plugin list             # Lister les plugins
+xcli health                  # Vérifier les services
+xcli manager top             # Dashboard live
+xcli migration init          # Initialiser Alembic
+```
+"""
+
+
+# ── Public API ────────────────────────────────────────────────
+
+def create_project(
+    name: str,
+    *,
+    env: str = "development",
+    db_type: str = "sqlite",
+    db_url: str | None = None,
+    plugins_dir: str = "./app",
+    output_dir: str | None = None,
+) -> Path:
+    """Scaffold a full xcore project. Returns the created root path."""
+    secret_key = secrets.token_hex(32)
+    server_key = secrets.token_hex(32)
+    is_dev     = env == "development"
+    log_level  = "DEBUG" if is_dev else "INFO"
+    resolved_db_url = db_url or _DB_URLS.get(db_type, _DB_URLS["sqlite"])
+
+    root = Path(output_dir or f"./{name}").resolve()
+    root.mkdir(parents=True, exist_ok=True)
+
+    _write(root / "integration.yaml", _INTEGRATION_YAML.format(
         name=name,
         env=env,
         debug="true" if is_dev else "false",
         secret_key=secret_key,
         server_key=server_key,
         reload="true" if is_dev else "false",
-        log_level="DEBUG" if is_dev else "INFO",
+        log_level=log_level,
         plugins_dir=plugins_dir,
         db_type=db_type,
-        db_url=db_url,
-    )
+        db_url=resolved_db_url,
+    ))
+    _write(root / "main.py",          _MAIN_PY.format(name=name))
+    _write(root / ".gitignore",       _GITIGNORE)
+    _write(root / "requirements.txt", _REQUIREMENTS)
+    _write(root / ".env",             _DOTENV.format(
+        secret_key=secret_key,
+        server_key=server_key,
+        db_url=resolved_db_url,
+    ))
+    _write(root / "README.md", _README.format(name=name))
 
-    filename = Prompt.ask("\nSave as", default="integration")
-    path = Path(filename.split(".")[0] + ".yaml")
+    # Directories
+    plugins_path = root / plugins_dir.lstrip("./")
+    plugins_path.mkdir(parents=True, exist_ok=True)
+    (plugins_path / ".gitkeep").touch()
+
+    log_path = root / "log"
+    log_path.mkdir(parents=True, exist_ok=True)
+    (log_path / ".gitkeep").touch()
+
+    return root
+
+
+def _write(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
 
-    console.print(f"\n[green]✓[/green] [cyan]{path}[/cyan] created.")
+
+# ── Legacy wizard (kept for backward compat) ──────────────────
+
+def _app() -> None:
+    """Kept for backward compatibility — now delegates to xcli init <name>."""
+    console.print("[yellow]Conseil :[/yellow] utilisez [cyan]xcli init <nom-du-projet>[/cyan] directement.")

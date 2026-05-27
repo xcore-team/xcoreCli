@@ -7,17 +7,15 @@ from typer import Typer
 
 from xcli._run import run
 
-from .shared import console
+from .shared import console, plugins_dir
 
 
 def register(app: Typer) -> None:
     @app.command('load')
     def load(name: str) -> None:
-        """Load a plugin directly (boots xcore standalone)."""
-
+        """Load a plugin into the running xcore instance."""
         async def _run() -> None:
             from xcli._xcore import boot
-
             xcore = await boot()
             try:
                 await xcore.plugins.load(name)
@@ -27,29 +25,11 @@ def register(app: Typer) -> None:
 
         run(_run())
 
-    @app.command('reload')
-    def reload(name: str) -> None:
-        """Reload a plugin directly (boots xcore standalone)."""
-
-        async def _run() -> None:
-            from xcli._xcore import boot
-
-            xcore = await boot()
-            try:
-                await xcore.plugins.reload(name)
-                console.print(f'[green]✓[/green] Plugin [cyan]{name}[/cyan] reloaded.')
-            finally:
-                await xcore.plugins.shutdown()
-
-        run(_run())
-
     @app.command('unload')
     def unload(name: str) -> None:
-        """Unload a plugin directly (boots xcore standalone)."""
-
+        """Unload a plugin and free its resources."""
         async def _run() -> None:
             from xcli._xcore import boot
-
             xcore = await boot()
             try:
                 await xcore.plugins.unload(name)
@@ -59,10 +39,54 @@ def register(app: Typer) -> None:
 
         run(_run())
 
+    @app.command('reload')
+    def reload(name: str) -> None:
+        """Reload a plugin (applies code and config changes)."""
+        async def _run() -> None:
+            from xcli._xcore import boot
+            xcore = await boot()
+            try:
+                await xcore.plugins.reload(name)
+                console.print(f'[green]✓[/green] Plugin [cyan]{name}[/cyan] reloaded.')
+            finally:
+                await xcore.plugins.shutdown()
+
+        run(_run())
+
+    @app.command('reload-all')
+    def reload_all() -> None:
+        """Reload all active plugins at once."""
+        async def _run() -> None:
+            from xcli._xcore import boot
+            xcore = await boot()
+            try:
+                plugin_dir = plugins_dir()
+                names = sorted(
+                    d.name for d in plugin_dir.iterdir()
+                    if d.is_dir() and not d.name.startswith('_')
+                )
+                if not names:
+                    console.print('[yellow]No plugins found.[/yellow]')
+                    return
+                ok_count = err_count = 0
+                for pname in names:
+                    try:
+                        await xcore.plugins.reload(pname)
+                        console.print(f'[green]✓[/green] {pname}')
+                        ok_count += 1
+                    except Exception as e:
+                        from rich.markup import escape
+                        console.print(f'[red]✗[/red] {pname}: {escape(str(e))}')
+                        err_count += 1
+                console.print(f'\n[bold]Result: [green]{ok_count} reloaded[/], [red]{err_count} error(s)[/][/]')
+            finally:
+                await xcore.plugins.shutdown()
+
+        run(_run())
+
     @app.command('status')
     def status() -> None:
         """Show runtime status of all loaded plugins."""
-
         async def _run() -> None:
             from rich.table import Table
             from xcli._xcore import boot
@@ -90,11 +114,9 @@ def register(app: Typer) -> None:
         action: str,
         payload: str = typer.Option('{}', '--payload', '-p', help='JSON payload'),
     ) -> None:
-        """Call a plugin action directly (boots xcore standalone)."""
-
+        """Call a plugin action directly."""
         async def _run() -> None:
             from xcli._xcore import boot
-
             try:
                 data = json.loads(payload)
             except json.JSONDecodeError as e:

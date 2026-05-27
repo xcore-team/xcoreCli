@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import sys
+import os
+from pathlib import Path
 
 import typer
 import yaml
-from rich.prompt import Confirm, Prompt
 from typer import Typer
 
 from .scaffold import scaffold
@@ -12,32 +12,106 @@ from .shared import console, name_re, plugins_dir, print_tree
 
 
 def register(app: Typer) -> None:
-    @app.command('new')
-    def new() -> None:
-        """Scaffold a new plugin in the directory from integration.yaml."""
-        console.print('\n[bold]xcli plugin new[/bold]\n')
+
+    @app.command('scaffold')
+    def scaffold_cmd(
+        name: str = typer.Argument(..., help='Plugin name (lowercase, underscores)'),
+        mode: str = typer.Option('trusted', '--mode', '-m', help='trusted | sandboxed | legacy'),
+        description: str = typer.Option('', '--description', '-d', help='Plugin description'),
+        author: str = typer.Option('', '--author', '-a', help='Author'),
+        version: str = typer.Option('0.1.0', '--version', '-v', help='Initial version'),
+        has_db: bool = typer.Option(False, '--db', help='Include models.py + schemas.py'),
+        has_cache: bool = typer.Option(False, '--cache', help='Inject cache service'),
+        has_scheduler: bool = typer.Option(False, '--scheduler', help='Inject scheduler service'),
+        no_routes: bool = typer.Option(False, '--no-routes', help='Skip FastAPI router generation'),
+        timeout: int = typer.Option(30, '--timeout', help='Timeout per call in seconds (sandboxed)'),
+        memory: int = typer.Option(256, '--memory', help='Max memory in MB (sandboxed)'),
+        disk: int = typer.Option(100, '--disk', help='Max disk in MB (sandboxed)'),
+        force: bool = typer.Option(False, '--force', '-f', help='Overwrite if plugin already exists'),
+    ) -> None:
+        """Scaffold a new plugin in the plugins directory."""
+        if not name_re.match(name):
+            console.print('[red]Invalid name.[/red] Use lowercase letters, digits and underscores only.')
+            raise typer.Exit(1)
+
+        if mode not in ('trusted', 'sandboxed', 'legacy'):
+            console.print(f'[red]Invalid mode:[/red] {mode}. Valid values: trusted, sandboxed, legacy')
+            raise typer.Exit(1)
+
         plugins_root = plugins_dir()
-
-        while True:
-            name = Prompt.ask('Plugin name  [dim](lowercase, underscores)[/dim]')
-            if name_re.match(name):
-                break
-            console.print('[red]Lowercase letters, digits and underscores only.[/red]')
-
-        mode = Prompt.ask('Execution mode', choices=['trusted', 'sandboxed', 'legacy'], default='trusted')
         target = plugins_root / name
 
-        if target.exists() and not Confirm.ask(f'[yellow]{target}[/yellow] exists. Continue?', default=False):
-            sys.exit(0)
+        if target.exists() and not force:
+            console.print(f'[yellow]{target}[/yellow] already exists. Use [cyan]--force[/cyan] to overwrite.')
+            raise typer.Exit(1)
 
-        created = scaffold({'name': name, 'execution_mode': mode}, target)
+        cfg = {
+            'name':            name,
+            'description':     description or f'Plugin {name}',
+            'author':          author,
+            'version':         version,
+            'execution_mode':  mode,
+            'has_db':          has_db,
+            'has_cache':       has_cache,
+            'has_scheduler':   has_scheduler,
+            'has_routes':      not no_routes,
+            'timeout_seconds': timeout,
+            'max_memory_mb':   memory,
+            'max_disk_mb':     disk,
+        }
+
+        created = scaffold(cfg, target)
         console.print()
         print_tree(target, created)
-        console.print(f'\n[green]✓[/green] [cyan]{target}[/cyan] ready.')
+        console.print(f'\n[green]✓[/green] Plugin [cyan]{name}[/cyan] → [dim]{target}[/dim]')
+        if mode == 'sandboxed':
+            console.print(f'  [cyan]xcli sandbox run {name}[/cyan]')
+        else:
+            console.print(f'  [cyan]xcli plugin runtime load {name}[/cyan]')
+
+    @app.command('link')
+    def link(
+        path: str = typer.Option(..., '--path', '-p', help='Path to plugin source directory'),
+        name: str = typer.Option('', '--name', '-n', help='Override plugin name (default: source directory name)'),
+    ) -> None:
+        """Create a symlink from plugins directory to a local development source."""
+        source = Path(path).resolve()
+        if not source.exists() or not source.is_dir():
+            console.print(f'[red]Source not found or not a directory:[/red] {source}')
+            raise typer.Exit(1)
+
+        plugin_name = name or source.name
+        if not name_re.match(plugin_name):
+            console.print(f'[red]Invalid plugin name:[/red] {plugin_name}. Use lowercase letters, digits and underscores.')
+            raise typer.Exit(1)
+
+        dest = plugins_dir() / plugin_name
+        if dest.exists() or dest.is_symlink():
+            console.print(f'[yellow]{dest}[/yellow] already exists. Remove it first with [cyan]xcli plugin local unlink {plugin_name}[/cyan].')
+            raise typer.Exit(1)
+
+        dest.symlink_to(source)
+        console.print(f'[green]✓[/green] Linked [cyan]{plugin_name}[/cyan]: [dim]{dest}[/dim] → [dim]{source}[/dim]')
+        console.print(f'  [dim]Changes in {source} are reflected immediately.[/dim]')
+
+    @app.command('unlink')
+    def unlink(name: str = typer.Argument(..., help='Plugin name to unlink')) -> None:
+        """Remove a symlink created by `xcli plugin local link`."""
+        dest = plugins_dir() / name
+        if not dest.is_symlink():
+            if dest.exists():
+                console.print(f'[red]{name}[/red] is not a symlink — use [cyan]xcli plugin remove {name}[/cyan] to remove installed plugins.')
+            else:
+                console.print(f"[red]Plugin '{name}' not found.[/red]")
+            raise typer.Exit(1)
+
+        real = dest.resolve()
+        dest.unlink()
+        console.print(f'[green]✓[/green] Unlinked [cyan]{name}[/cyan] (source: [dim]{real}[/dim])')
 
     @app.command('list')
     def list_plugins() -> None:
-        """List installed plugins."""
+        """List installed plugins (including symlinked ones)."""
         from rich.table import Table
 
         plugin_dir = plugins_dir()
@@ -54,10 +128,13 @@ def register(app: Typer) -> None:
         table.add_column('Name', style='cyan', no_wrap=True)
         table.add_column('Version', style='magenta')
         table.add_column('Mode', style='green')
+        table.add_column('Type', style='dim')
         table.add_column('Entry', style='dim')
 
-        for name in plugins:
-            manifest_path = plugin_dir / name / 'plugin.yaml'
+        for pname in plugins:
+            plugin_path = plugin_dir / pname
+            link_type = '[cyan]symlink[/cyan]' if plugin_path.is_symlink() else 'installed'
+            manifest_path = plugin_path / 'plugin.yaml'
             version = mode = entry = '?'
             if manifest_path.exists():
                 try:
@@ -67,120 +144,6 @@ def register(app: Typer) -> None:
                     entry = str(raw.get('entry_point', raw.get('main', '?')))
                 except Exception:
                     pass
-            table.add_row(name, version, mode, entry)
+            table.add_row(pname, version, mode, link_type, entry)
 
         console.print(table)
-
-    @app.command('health')
-    def health() -> None:
-        """Health-check all installed plugins."""
-        from rich.markup import escape
-        from rich.table import Table
-        from xcore.kernel.security.signature import is_signed
-        from xcore.kernel.security.validation import ASTScanner, ManifestValidator
-
-        plugin_dir = plugins_dir()
-        plugins = sorted(d for d in plugin_dir.iterdir() if d.is_dir() and not d.name.startswith('_'))
-        if not plugins:
-            console.print('[yellow]No plugins found.[/yellow]')
-            return
-
-        table = Table(title='Plugin Health Check')
-        table.add_column('Plugin', style='cyan', no_wrap=True)
-        table.add_column('Mode', justify='center')
-        table.add_column('Sig', justify='center')
-        table.add_column('AST', justify='center')
-        table.add_column('Manifest', justify='center')
-        table.add_column('Status', style='dim')
-
-        ok_count = err_count = 0
-        with console.status('[green]Analyzing plugins...'):
-            for entry in plugins:
-                try:
-                    manifest, _, _ = ManifestValidator().load_and_validate(entry)
-                    signed = '✅' if is_signed(manifest) else '⚠️'
-                    scanner = ASTScanner()
-                    result = scanner.scan(entry, whitelist=manifest.allowed_imports)
-                    ast_ok = '✅' if result.passed else '❌'
-                    table.add_row(entry.name, manifest.execution_mode.value, signed, ast_ok, '✅', '[green]OK[/]')
-                    ok_count += 1
-                except Exception as e:
-                    table.add_row(entry.name, '[red]?[/]', '[red]?[/]', '[red]?[/]', '❌', f'[red]{escape(str(e))}[/]')
-                    err_count += 1
-
-        console.print(table)
-        console.print(f'\n[bold]Result: [green]{ok_count} OK[/], [red]{err_count} error(s)[/][/]')
-
-    @app.command('remove')
-    def remove(name: str) -> None:
-        """Remove an installed plugin."""
-        import shutil
-
-        plugin_path = plugins_dir() / name
-        if not plugin_path.exists():
-            console.print(f"[red]Plugin '[cyan]{name}[/cyan]' not found.[/red]")
-            raise typer.Exit(1)
-        if not Confirm.ask(f"[bold red]⚠ Remove '[cyan]{name}[/cyan]'?[/]", default=False):
-            console.print('Cancelled.')
-            return
-        shutil.rmtree(plugin_path)
-        console.print(f'[green]✓[/green] Plugin [cyan]{name}[/cyan] removed.')
-
-    @app.command('info')
-    def info(name: str) -> None:
-        """Show details of an installed plugin."""
-        from rich.console import Group
-        from rich.markup import escape
-        from rich.panel import Panel
-        from xcore.kernel.security.signature import is_signed
-        from xcore.kernel.security.validation import ManifestValidator
-
-        plugin_path = plugins_dir() / name
-        if not plugin_path.exists():
-            console.print(f"[red]Plugin '[cyan]{name}[/cyan]' not found.[/red]")
-            raise typer.Exit(1)
-
-        try:
-            manifest, _, _ = ManifestValidator().load_and_validate(plugin_path)
-        except Exception as e:
-            console.print(f'[red]Invalid manifest:[/red] {escape(str(e))}')
-            raise typer.Exit(1)
-
-        lines = [
-            f'[bold cyan]Author     :[/] [magenta]{escape(str(manifest.author))}[/]',
-            f'[bold cyan]Description:[/] {escape(str(manifest.description))}',
-            f'[bold cyan]Mode       :[/] [yellow]{escape(str(manifest.execution_mode.value))}[/]',
-            f'[bold cyan]Framework  :[/] [green]{escape(str(manifest.framework_version))}[/]',
-            f'[bold cyan]Entry point:[/] [blue]{escape(str(manifest.entry_point))}[/]',
-            f"[bold cyan]Signed     :[/] {'✅ yes' if is_signed(manifest) else '⚠️  no'}",
-        ]
-        if getattr(manifest, 'requires', None):
-            deps = ', '.join(d.name if hasattr(d, 'name') else str(d) for d in manifest.requires)
-            lines.append(f'[bold cyan]Requires   :[/] {escape(deps)}')
-        if getattr(manifest, 'allowed_imports', None):
-            lines.append(f"[bold cyan]Imports OK :[/] [dim]{escape(', '.join(map(str, manifest.allowed_imports)))}[/]")
-
-        resources = manifest.resources
-        lines += [
-            '\n[bold white]Resources:[/]',
-            f'  [cyan]timeout    :[/] [magenta]{resources.timeout_seconds}s[/]',
-            f'  [cyan]max_memory :[/] [magenta]{resources.max_memory_mb} MB[/]',
-            f'  [cyan]max_disk   :[/] [magenta]{resources.max_disk_mb} MB[/]',
-            f'  [cyan]rate_limit :[/] [magenta]{resources.rate_limit.calls} calls / {resources.rate_limit.period_seconds}s[/]',
-        ]
-        if getattr(manifest, 'permissions', None):
-            lines.append(f'\n[bold white]Permissions ({len(manifest.permissions)}):[/]')
-            for permission in manifest.permissions:
-                symbol = '✅' if permission.get('effect', 'allow') == 'allow' else '❌'
-                lines.append(
-                    f"  {symbol} {escape(str(permission.get('resource', '*')))} → {escape(str(permission.get('actions', ['*'])))}"
-                )
-
-        console.print(
-            Panel(
-                Group(*lines),
-                title=f'[bold green]🔌 {escape(manifest.name)} v{escape(manifest.version)}[/]',
-                expand=False,
-                border_style='cyan',
-            )
-        )

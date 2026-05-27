@@ -31,6 +31,8 @@ from typer import Typer
 
 _CTX = {"help_option_names": ["-h", "--help"]}
 app = Typer(help="Runtime monitoring and service management.", context_settings=_CTX)
+services_app = Typer(help="Manage individual services (list, reload, unload).", context_settings=_CTX)
+app.add_typer(services_app, name="services")
 console = Console()
 err = Console(stderr=True)
 
@@ -349,11 +351,11 @@ def _build_services_table() -> Table:
     return table
 
 
-@app.command("services")
-def services_cmd(
+@services_app.command("list")
+def services_list(
     watch: bool = typer.Option(False, "--watch", "-w", help="Live refresh every 3s"),
 ) -> None:
-    """List all services with status and health checks."""
+    """List all configured services with status and health."""
     if not watch:
         try:
             console.print(_build_services_table())
@@ -375,11 +377,9 @@ def services_cmd(
         pass
 
 
-# ── service reload ────────────────────────────────────────────
-
-@app.command("reload")
-def service_reload(name: str = typer.Argument(..., help="Service name (e.g. database, cache, scheduler)")) -> None:
-    """Reload (shutdown then re-init) a specific service."""
+@services_app.command("reload")
+def services_reload(name: str = typer.Argument(..., help="Service name (e.g. db, cache, scheduler)")) -> None:
+    """Force a service to re-read its configuration and reconnect."""
     async def _reload():
         from xcore.configurations.loader import ConfigLoader
         from xcore.services import ServiceContainer
@@ -389,12 +389,11 @@ def service_reload(name: str = typer.Argument(..., help="Service name (e.g. data
         container.load_default_providers()
         await container.init()
 
-        # Try exact name then <name>_service
         svc = container._services.get(name) or container._services.get(f"{name}_service")
         if svc is None:
             available = sorted(container._services.keys())
             err.print(f"[red]Service '[cyan]{name}[/cyan]' not found.[/red]")
-            err.print(f"Available managed services: {', '.join(available) or 'none'}")
+            err.print(f"Available: {', '.join(available) or 'none'}")
             err.print(f"Registered keys: {', '.join(sorted(container.status()['registered_keys']))}")
             await container.shutdown()
             raise typer.Exit(1)
@@ -407,18 +406,14 @@ def service_reload(name: str = typer.Argument(..., help="Service name (e.g. data
 
         sym = "[green]✓[/green]" if ok else "[red]✗[/red]"
         console.print(f"{sym} Service {svc_label} reloaded — {escape(msg)}")
-
-        # Shutdown the rest cleanly
         await container.shutdown()
 
     asyncio.run(_reload())
 
 
-# ── service unload ────────────────────────────────────────────
-
-@app.command("unload")
-def service_unload(name: str = typer.Argument(..., help="Service name to stop")) -> None:
-    """Shutdown a specific service (unload it from the container)."""
+@services_app.command("unload")
+def services_unload(name: str = typer.Argument(..., help="Service name to disable")) -> None:
+    """Temporarily disable a service without restarting the application."""
     async def _unload():
         from xcore.configurations.loader import ConfigLoader
         from xcore.services import ServiceContainer
@@ -441,7 +436,6 @@ def service_unload(name: str = typer.Argument(..., help="Service name to stop"))
 
         console.print(f"[green]✓[/green] Service [cyan]{name}[/cyan] unloaded.")
 
-        # Stop remaining services cleanly
         for key, other in reversed(list(container._services.items())):
             if key not in (name, f"{name}_service"):
                 try:
@@ -534,3 +528,75 @@ def top(
     finally:
         if log_fh:
             log_fh.close()
+
+
+# ── start ─────────────────────────────────────────────────────
+
+@app.command("start")
+def start(
+    reload: bool = typer.Option(False, "--reload", "-r", help="Auto-reload on code changes (dev)"),
+    host: str = typer.Option("0.0.0.0", "--host", help="Bind address"),
+    port: int = typer.Option(8000, "--port", "-p", help="Bind port"),
+    workers: int = typer.Option(1, "--workers", "-w", help="Number of uvicorn workers"),
+    detach: bool = typer.Option(False, "--detach", "-d", help="Run in background"),
+    loglevel: str = typer.Option("info", "--loglevel", "-l"),
+) -> None:
+    """Start the FastAPI application server (uvicorn).
+
+    Examples:
+        xcli manager start --reload        # dev with auto-reload
+        xcli manager start --workers 4     # production
+        xcli manager start --detach        # background daemon
+    """
+    import subprocess
+    import sys
+
+    from xcli.worker.worker import PID_API, PID_DIR, LOG_API, _write_pid
+
+    raw = _raw_cfg()
+    srv = (raw.get("app") or {}).get("server") or {}
+    resolved_host = host if host != "0.0.0.0" else srv.get("host", host)
+    resolved_port = port if port != 8000 else srv.get("port", port)
+    resolved_workers = workers if workers != 1 else srv.get("workers", workers)
+    resolved_log = loglevel if loglevel != "info" else (srv.get("log_level") or loglevel).lower()
+    app_path = srv.get("app", "main:app")
+
+    cmd = [
+        sys.executable, "-m", "uvicorn", app_path,
+        "--host", str(resolved_host),
+        "--port", str(resolved_port),
+        "--log-level", resolved_log,
+    ]
+    if reload:
+        cmd.append("--reload")
+    elif resolved_workers > 1:
+        cmd.extend(["--workers", str(resolved_workers)])
+
+    if detach:
+        PID_DIR.mkdir(parents=True, exist_ok=True)
+        LOG_API.parent.mkdir(parents=True, exist_ok=True)
+        log_fh = open(LOG_API, "a")
+        proc = subprocess.Popen(cmd, stdout=log_fh, stderr=log_fh, start_new_session=True)
+        _write_pid(PID_API, proc.pid)
+        console.print(
+            f"[green]✓[/green] API started in background — PID {proc.pid}  "
+            f"[dim]log → {LOG_API}[/dim]"
+        )
+        return
+
+    console.print(f"[dim]→ uvicorn {app_path} --host {resolved_host} --port {resolved_port}[/dim]")
+    console.print("[dim]Ctrl+C to stop[/dim]\n")
+    try:
+        proc = subprocess.Popen(cmd)
+        proc.wait()
+    except KeyboardInterrupt:
+        proc.terminate()
+        proc.wait()
+
+
+@app.command("stop")
+def stop() -> None:
+    """Stop the API server started with `xcli manager start --detach`."""
+    from xcli.worker.worker import PID_API, _stop_pid
+
+    _stop_pid(PID_API, "API server")

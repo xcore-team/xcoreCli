@@ -37,14 +37,7 @@ def _normalize_plugins(payload: Any) -> list[dict[str, Any]]:
         if isinstance(item, dict):
             normalized.append(item)
         else:
-            normalized.append(
-                {
-                    'name': str(item),
-                    'version': '?',
-                    'author': '—',
-                    'description': '',
-                }
-            )
+            normalized.append({'name': str(item), 'version': '?', 'author': '—', 'description': ''})
     return normalized
 
 
@@ -89,7 +82,7 @@ def register(app: Typer) -> None:
 
     @app.command('search')
     def search(query: str) -> None:
-        """Search the marketplace for a plugin."""
+        """Search the marketplace for plugins by keyword or tag."""
         with console.status(f"Searching for '[cyan]{query}[/cyan]'..."):
             results = _normalize_plugins(asyncio.run(_client().search(query)))
         if not results:
@@ -97,9 +90,9 @@ def register(app: Typer) -> None:
             return
         _table(results, f'Search results — {query}')
 
-    @app.command('show')
-    def show(name: str) -> None:
-        """Show marketplace details for a plugin (use info for installed plugins)."""
+    @app.command('info')
+    def info(name: str) -> None:
+        """Show full details for a marketplace plugin before installing."""
         from rich.markup import escape
         from rich.panel import Panel
 
@@ -113,6 +106,6 @@ def register(app: Typer) -> None:
 
     @app.command('rate')
     def rate(name: str, score: int = typer.Option(..., min=1, max=5, help='Score 1–5')) -> None:
-        """Rate a marketplace plugin."""
+        """Rate a marketplace plugin (1–5 stars)."""
         asyncio.run(_client().rate_plugin(name, score=score))
         console.print(f'[green]✓[/green] Rated [cyan]{name}[/cyan] [magenta]{score}/5[/magenta].')

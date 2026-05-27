@@ -19,16 +19,14 @@ dependencies = [
 ]
 
 [project.scripts]
-xcore-cli = "xcli.main:app"
-xcli = "xcli.main:app"
+#xcore-cli = "xcli.main:app"
+#xcli = "xcli.main:app"
 
-[tool.hatch.build.targets.wheel]
-packages = ["xcli"]
+#[tool.hatch.build.targets.wheel]
+#packages = ["xcli"]
 
 [tool.uv]
 package = true
-
-[tool.uv.sources]
 
 [dependency-groups]
 dev = [
