@@ -23,10 +23,12 @@ xcore-cli = "xcli.main:app"
 xcli = "xcli.main:app"
 
 [tool.hatch.build.targets.wheel]
+packages = ["xcli"]
 
 [tool.uv]
 package = true
-packages = ["xcli"]
+
+
 [dependency-groups]
 dev = [
     "mkdocs-material>=9.7.6",
