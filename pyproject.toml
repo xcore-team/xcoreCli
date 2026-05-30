@@ -26,7 +26,7 @@ xcli = "xcli.main:app"
 
 [tool.uv]
 package = true
-
+packages = ["xcli"]
 [dependency-groups]
 dev = [
     "mkdocs-material>=9.7.6",
