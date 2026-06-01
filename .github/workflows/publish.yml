@@ -60,7 +60,7 @@ jobs:
   #      run: uv run pytest
 
   build-and-publish:
-    name: Build and publish xcore-cli
+    name: Build and publish xcorecli
     runs-on: ubuntu-latest
     # needs: test
     environment: pypi
@@ -84,4 +84,6 @@ jobs:
         run: uv build
 
       - name: Publish to PyPI
+        env:
+          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
         run: uv publish
