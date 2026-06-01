@@ -4,7 +4,7 @@ on:
   push:
     tags:
       - "v*"
-  workflow_dispatch:  # 👈 ajoute un bouton "Run workflow" dans GitHub Actions
+  workflow_dispatch:
     inputs:
       tag:
         description: "Tag à republier (ex: v1.2.3)"
@@ -18,7 +18,6 @@ on:
 
 permissions:
   contents: read
-  id-token: write
 
 jobs:
   validate:
@@ -34,39 +33,14 @@ jobs:
           fi
           echo "✅ Republication confirmée pour ${{ inputs.tag }}"
 
-  #test:
-  #  name: Run tests
-  #  runs-on: ubuntu-latest
-  #  needs: validate
-  #  steps:
-  #    - name: Checkout (tag manuel ou push)
-  #      uses: actions/checkout@v4
-  #      with:
-  #        ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
-  #
-  #    - name: Install uv
-  #      uses: astral-sh/setup-uv@v4
-  #      with:
-  #        version: "latest"
-  #        enable-cache: true
-  #
-  #    - name: Set up Python
-  #      run: uv python install 3.12
-  #
-  #    - name: Install dependencies
-  #      run: uv sync --all-extras
-  #
-  #    - name: Run tests
-  #      run: uv run pytest
-
   build-and-publish:
-    name: Build and publish xcore-cli
+    name: Build and publish xcorecli
     runs-on: ubuntu-latest
-    # needs: test
+    needs: validate
     environment: pypi
 
     steps:
-      - name: Checkout (tag manuel ou push)
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
@@ -84,4 +58,6 @@ jobs:
         run: uv build
 
       - name: Publish to PyPI
-        run: uv publish
+        run: uv publish --no-trusted-publishing
+        env:
+          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_TOKEN }}
