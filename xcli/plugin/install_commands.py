@@ -179,6 +179,9 @@ def register(app: Typer) -> None:
     @app.command('versions')
     def versions(name: str) -> None:
         """List available versions of a marketplace plugin."""
+        from xcli._xcore import _require_xcore
+        _require_xcore()
+
         async def _run() -> None:
             from rich.table import Table
 
@@ -233,6 +236,8 @@ def register(app: Typer) -> None:
         from rich.console import Group
         from rich.markup import escape
         from rich.panel import Panel
+        from xcli._xcore import _require_xcore
+        _require_xcore()
         from xcore.kernel.security.signature import is_signed
         from xcore.kernel.security.validation import ManifestValidator
 
@@ -291,6 +296,8 @@ def register(app: Typer) -> None:
         """Health-check all installed plugins (signature + AST + manifest)."""
         from rich.markup import escape
         from rich.table import Table
+        from xcli._xcore import _require_xcore
+        _require_xcore()
         from xcore.kernel.security.signature import is_signed
         from xcore.kernel.security.validation import ASTScanner, ManifestValidator
 

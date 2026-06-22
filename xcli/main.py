@@ -79,6 +79,9 @@ def upgrade() -> None:
 @app.command()
 def health() -> None:
     """Global health-check of all xcore services."""
+    from xcli._xcore import _require_xcore
+    _require_xcore()
+
     async def _run():
         from xcore.configurations.loader import ConfigLoader
         from xcore.services import ServiceContainer
@@ -112,6 +115,9 @@ def health() -> None:
 @app.command()
 def services() -> None:
     """Show status of all xcore services."""
+    from xcli._xcore import _require_xcore
+    _require_xcore()
+
     async def _run():
         from xcore.configurations.loader import ConfigLoader
         from xcore.services import ServiceContainer
