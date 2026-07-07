@@ -9,6 +9,7 @@
 
 - **Project Initialization**: Seamlessly scaffold new projects and manage `integration.yaml`.
 - **Plugin Lifecycle**: Full control over installing, signing, and updating plugins.
+- **Production Deploy**: Deploy plugins to remote servers via SSH with pre/post hooks.
 - **Real-time Monitoring**: Integrated dashboard for service health and resource usage.
 - **Worker Orchestration**: Manage Celery/XWorker processes with ease.
 - **Security & Sandboxing**: Resource isolation and AST-based whitelisting for plugins.
@@ -29,4 +30,5 @@ make install
 
 - [Installation Guide](getting-started/install.md)
 - [Authentication Setup](getting-started/auth.md)
+- [Deploy to Production](deploy/index.md)
 - [Core Commands Reference](reference.md)
