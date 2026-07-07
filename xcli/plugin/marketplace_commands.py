@@ -10,6 +10,8 @@ from .shared import console
 
 
 def _client():
+    from xcli._xcore import _require_xcore
+    _require_xcore()
     from xcore.configurations.loader import ConfigLoader
     from xcore.marketplace import MarketplaceClient
 

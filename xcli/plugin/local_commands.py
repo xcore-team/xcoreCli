@@ -28,6 +28,7 @@ def register(app: Typer) -> None:
         memory: int = typer.Option(256, '--memory', help='Max memory in MB (sandboxed)'),
         disk: int = typer.Option(100, '--disk', help='Max disk in MB (sandboxed)'),
         force: bool = typer.Option(False, '--force', '-f', help='Overwrite if plugin already exists'),
+        output: str = typer.Option(None, '--output', '-o', help='Output directory (overrides plugins_dir from config)'),
     ) -> None:
         """Scaffold a new plugin in the plugins directory."""
         if not name_re.match(name):
@@ -38,7 +39,17 @@ def register(app: Typer) -> None:
             console.print(f'[red]Invalid mode:[/red] {mode}. Valid values: trusted, sandboxed, legacy')
             raise typer.Exit(1)
 
-        plugins_root = plugins_dir()
+        if output:
+            plugins_root = Path(output).expanduser().resolve()
+            plugins_root.mkdir(parents=True, exist_ok=True)
+        else:
+            try:
+                plugins_root = plugins_dir()
+            except SystemExit:
+                # No integration.yaml found — fall back to ./app
+                plugins_root = Path.cwd() / 'app'
+                plugins_root.mkdir(parents=True, exist_ok=True)
+                console.print(f'[yellow]No integration.yaml found — scaffolding to [dim]{plugins_root}[/dim][/yellow]')
         target = plugins_root / name
 
         if target.exists() and not force:

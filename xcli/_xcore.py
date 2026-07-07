@@ -17,6 +17,19 @@ if TYPE_CHECKING:
 console = Console()
 
 
+def _require_xcore() -> None:
+    """Raise a clean error if xcore is not installed in the current environment."""
+    try:
+        import xcore  # noqa: F401
+    except ImportError as exc:
+        console.print(
+            "[red]xcore is not installed.[/red]\n"
+            "Run: [cyan]pip install xcore[/cyan]\n"
+            "[dim]Or install in your project: pip install -r requirements.txt[/dim]"
+        )
+        raise SystemExit(1) from exc
+
+
 def _require_config() -> 'Path':
     path = find_config_path(required=True)
     assert path is not None
@@ -29,6 +42,7 @@ def load_raw_config() -> dict:
 
 async def boot() -> 'Xcore':
     """Boot xcore in standalone mode (no FastAPI). Reads integration.yaml automatically."""
+    _require_xcore()
     from xcore import Xcore
 
     _require_config()

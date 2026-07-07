@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import ast
+import json
 from pathlib import Path
 from typing import Optional
 
@@ -10,6 +12,233 @@ from typer import Typer
 from .shared import console
 
 
+# ── AST-based schema extraction (no import needed) ─────────────
+
+
+def _ast_value(node: ast.expr) -> object:
+    """Convert a simple AST literal/name to a Python value."""
+    if isinstance(node, ast.Constant):
+        return node.value
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return f'{_ast_value(node.value)}.{node.attr}'
+    if isinstance(node, ast.Tuple):
+        elts = [_ast_value(e) for e in node.elts]
+        return elts[0] if elts else 'Any'
+    if isinstance(node, ast.Dict):
+        result = {}
+        for k, v in zip(node.keys, node.values):
+            if k is not None:
+                key = _ast_value(k)
+                val = _ast_value(v)
+                result[str(key)] = str(val) if val is not None else 'Any'
+        return result
+    if isinstance(node, ast.List):
+        return [_ast_value(e) for e in node.elts]
+    return 'Any'
+
+
+def _decorator_name(dec: ast.expr) -> str:
+    """Return the base name of a decorator (strips call, attributes)."""
+    if isinstance(dec, ast.Call):
+        return _decorator_name(dec.func)
+    if isinstance(dec, ast.Name):
+        return dec.id
+    if isinstance(dec, ast.Attribute):
+        return dec.attr
+    return ''
+
+
+def _is_events_on(node: ast.expr) -> bool:
+    """Return True if node is a call to *.on(...) — matches ctx.events.on, events.on, etc."""
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == 'on'
+    )
+
+
+def _scan_inline_events(plugin_name: str, method_body: list, event_subs: list) -> None:
+    """
+    Walk a method body (e.g. on_load) and collect event subscriptions registered:
+      1. As a decorator:  @self.ctx.events.on("some.event") / @events.on("some.event")
+      2. As a direct call: self.ctx.events.on("some.event", self._handler)
+    """
+    for stmt in ast.walk(ast.Module(body=method_body, type_ignores=[])):
+        # Pattern 1 — nested function with @*.on("event") decorator
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for dec in stmt.decorator_list:
+                if _is_events_on(dec) and dec.args:
+                    ev = _ast_value(dec.args[0])
+                    if isinstance(ev, str):
+                        event_subs.append({
+                            'plugin': plugin_name,
+                            'event': ev,
+                            'method': stmt.name,
+                            'priority': 50,
+                            'once': False,
+                        })
+        # Pattern 2 — bare call: xxx.on("event", handler)
+        elif isinstance(stmt, ast.Expr) and _is_events_on(stmt.value):
+            call = stmt.value
+            if len(call.args) >= 2:
+                ev = _ast_value(call.args[0])
+                handler = _ast_value(call.args[1])
+                if isinstance(ev, str):
+                    event_subs.append({
+                        'plugin': plugin_name,
+                        'event': ev,
+                        'method': str(handler),
+                        'priority': 50,
+                        'once': False,
+                    })
+
+
+def _extract_from_file(plugin_name: str, source_path: Path, ipc_schemas: list, event_subs: list) -> None:
+    """Parse one file and append found actions/events to the provided lists."""
+    try:
+        tree = ast.parse(source_path.read_text(encoding='utf-8'), filename=str(source_path))
+    except SyntaxError as exc:
+        raise ValueError(f'Syntax error in {source_path}: {exc}') from exc
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ClassDef):
+            continue
+
+        for item in node.body:
+            if not isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+
+            action_name: str | None = None
+            schema_info: dict | None = None
+            event_name: str | None = None
+            event_priority: int = 50
+            event_once: bool = False
+
+            for dec in item.decorator_list:
+                name = _decorator_name(dec)
+
+                if name == 'action' and isinstance(dec, ast.Call) and dec.args:
+                    action_name = str(_ast_value(dec.args[0]))
+
+                elif name == 'schema' and isinstance(dec, ast.Call):
+                    kw = {k.arg: _ast_value(k.value) for k in dec.keywords if k.arg}
+                    raw_in = kw.get('input') or {}
+                    raw_out = kw.get('output') or {}
+                    schema_info = {
+                        'version': str(kw.get('version', '0.0.0')),
+                        'input': raw_in if isinstance(raw_in, dict) else {},
+                        'output': raw_out if isinstance(raw_out, dict) else {},
+                        'deprecated_fields': kw.get('deprecated_fields') or {},
+                        'breaking_since': kw.get('breaking_since'),
+                        'description': str(kw.get('description', '')),
+                    }
+
+                elif name == 'on_event' and isinstance(dec, ast.Call) and dec.args:
+                    event_name = str(_ast_value(dec.args[0]))
+                    kws = {k.arg: _ast_value(k.value) for k in dec.keywords if k.arg}
+                    event_priority = int(kws.get('priority', 50))
+                    event_once = bool(kws.get('once', False))
+
+            if action_name is not None:
+                entry: dict = {
+                    'plugin': plugin_name,
+                    'action': action_name,
+                    'version': '0.0.0',
+                    'input': {},
+                    'output': {},
+                    'deprecated_fields': {},
+                    'breaking_since': None,
+                    'description': '',
+                }
+                if schema_info:
+                    entry.update(schema_info)
+                ipc_schemas.append(entry)
+
+            if event_name is not None:
+                event_subs.append({
+                    'plugin': plugin_name,
+                    'event': event_name,
+                    'method': item.name,
+                    'priority': event_priority,
+                    'once': event_once,
+                })
+
+            # Scan the method body for inline ctx.events.on(...) registrations
+            _scan_inline_events(plugin_name, item.body, event_subs)
+
+
+def _extract_from_source(plugin_name: str, source_path: Path) -> tuple[list[dict], list[dict]]:
+    """
+    Parse a plugin source file (and all sibling .py files in the same directory)
+    with AST and extract:
+      - IPC action schemas  (decorated with @action + optional @schema)
+      - Event subscriptions (decorated with @on_event)
+
+    Scans the entire src directory so that mixin files (e.g. ipc.py, events.py)
+    are included alongside the entry point.
+
+    Returns (ipc_schemas, event_subs).
+    """
+    ipc_schemas: list[dict] = []
+    event_subs: list[dict] = []
+
+    src_dir = source_path.parent
+    py_files = sorted(src_dir.rglob('*.py'))
+    # Always process the entry point first, then the rest
+    ordered = [source_path] + [f for f in py_files if f != source_path]
+    seen_actions: set[str] = set()
+
+    for py_file in ordered:
+        file_ipc: list[dict] = []
+        file_evts: list[dict] = []
+        try:
+            _extract_from_file(plugin_name, py_file, file_ipc, file_evts)
+        except ValueError:
+            continue  # skip files with syntax errors silently
+        for entry in file_ipc:
+            key = entry['action']
+            if key not in seen_actions:
+                seen_actions.add(key)
+                ipc_schemas.append(entry)
+        event_subs.extend(file_evts)
+
+    return ipc_schemas, event_subs
+
+
+def _find_entry_point(plugin_path: Path, entry_point: str = 'src/main.py') -> Path | None:
+    """Locate the plugin entry point file."""
+    candidates = [
+        plugin_path / entry_point,
+        plugin_path / 'src' / 'main.py',
+        plugin_path / 'main.py',
+    ]
+    for p in candidates:
+        if p.exists():
+            return p
+    return None
+
+
+def _default_schema_path(project_root: Path) -> Path:
+    return project_root / '.xcore' / 'schemas.json'
+
+
+# ── Single-plugin validation helper ────────────────────────────
+
+
+def _validate_one(plugin_path: Path, manifest_validator) -> tuple[object | None, str | None]:
+    """Validate manifest of a single plugin. Returns (manifest, error_msg)."""
+    try:
+        manifest, _, _ = manifest_validator.load_and_validate(plugin_path)
+        return manifest, None
+    except Exception as exc:
+        return None, str(exc)
+
+
+# ── Command registration ────────────────────────────────────────
+
+
 def register(app: Typer) -> None:
     @app.command('sign')
     def sign(
@@ -17,6 +246,8 @@ def register(app: Typer) -> None:
         key: Optional[str] = typer.Option(None, '--key', '-k', help='HMAC signing key (reads from config if omitted)'),
     ) -> None:
         """Sign a plugin with its HMAC key."""
+        from xcli._xcore import _require_xcore
+        _require_xcore()
         from xcore.kernel.security.signature import sign_plugin
         from xcore.kernel.security.validation import ManifestValidator
 
@@ -36,6 +267,8 @@ def register(app: Typer) -> None:
         key: Optional[str] = typer.Option(None, '--key', '-k', help='HMAC signing key'),
     ) -> None:
         """Verify a plugin signature."""
+        from xcli._xcore import _require_xcore
+        _require_xcore()
         from xcore.kernel.security.signature import SignatureError, verify_plugin
         from xcore.kernel.security.validation import ManifestValidator
 
@@ -53,17 +286,222 @@ def register(app: Typer) -> None:
             raise typer.Exit(1)
 
     @app.command('validate')
-    def validate(path: str) -> None:
-        """Validate a plugin manifest."""
+    def validate(
+        path: Optional[str] = typer.Argument(
+            None,
+            help='Plugin directory to validate. Omit to scan all plugins from integration.yaml.',
+        ),
+        check_breaking: bool = typer.Option(
+            False, '--check-breaking',
+            help='Compare IPC actions & events against saved snapshot and report breaking changes.',
+        ),
+        save: bool = typer.Option(
+            False, '--save',
+            help='Save IPC action schemas and event subscriptions to the snapshot file.',
+        ),
+        schema_file: Optional[str] = typer.Option(
+            None, '--schema-file', '-s',
+            help='Path to the schemas JSON snapshot (default: .xcore/schemas.json).',
+        ),
+    ) -> None:
+        """
+        Validate plugin manifest(s) and optionally save or diff IPC action / event schemas.
+
+        Without a PATH, reads integration.yaml to find the plugins directory
+        and validates every plugin found there.
+        """
+        from xcli._xcore import _require_xcore
+        _require_xcore()
         from xcore.kernel.security.validation import ManifestValidator
 
-        plugin_path = Path(path)
-        try:
-            manifest, _, _ = ManifestValidator().load_and_validate(plugin_path)
-            console.print(
-                f'[green]✓[/green] Valid manifest: [cyan]{manifest.name}[/cyan] '
-                f'v{manifest.version} [{manifest.execution_mode.value}]'
+        validator = ManifestValidator()
+
+        # ── Resolve the list of plugins to process ────────────────
+        if path:
+            plugin_dirs = [Path(path).resolve()]
+            project_root = plugin_dirs[0].parent.parent
+        else:
+            from xcli.config.runtime import find_config_path, plugins_directory
+            cfg_path = find_config_path(required=True)
+            assert cfg_path is not None
+            project_root = cfg_path.parent.resolve()
+            plugins_root = plugins_directory()
+            if not plugins_root.exists():
+                console.print(f'[yellow]Plugins directory not found:[/yellow] {plugins_root}')
+                raise typer.Exit(1)
+            plugin_dirs = sorted(
+                d for d in plugins_root.iterdir()
+                if d.is_dir() and not d.name.startswith('_')
             )
-        except Exception as e:
-            console.print(f'[red]✗ Invalid manifest:[/red] {escape(str(e))}')
+            if not plugin_dirs:
+                console.print('[yellow]No plugins found.[/yellow]')
+                return
+
+        snap_path = Path(schema_file).resolve() if schema_file else _default_schema_path(project_root)
+
+        # ── Validate manifests ────────────────────────────────────
+        console.print(f'\n[bold]Validating {len(plugin_dirs)} plugin(s)…[/bold]\n')
+
+        valid_plugins: list[tuple[object, Path]] = []   # (manifest, plugin_path)
+        has_error = False
+
+        for pdir in plugin_dirs:
+            manifest, err = _validate_one(pdir, validator)
+            if err:
+                console.print(f'[red]✗[/red] [cyan]{pdir.name}[/cyan] — {escape(err)}')
+                has_error = True
+            else:
+                console.print(
+                    f'[green]✓[/green] [cyan]{manifest.name}[/cyan] '  # type: ignore[union-attr]
+                    f'v{manifest.version} [{manifest.execution_mode.value}]'  # type: ignore[union-attr]
+                )
+                valid_plugins.append((manifest, pdir))
+
+        if has_error and not valid_plugins:
+            raise typer.Exit(1)
+
+        if not save and not check_breaking:
+            if has_error:
+                raise typer.Exit(1)
+            return
+
+        # ── Extract schemas from source (AST) — grouped by plugin ──
+        console.print()
+        # { plugin_name: {"actions": [...], "events": [...]} }
+        per_plugin: dict[str, dict] = {}
+
+        for manifest, pdir in valid_plugins:
+            entry_attr = getattr(manifest, 'entry_point', 'src/main.py')
+            src = _find_entry_point(pdir, entry_attr)
+            if src is None:
+                console.print(f'[yellow]  {manifest.name}: entry point not found — skipping[/yellow]')
+                per_plugin[manifest.name] = {'actions': [], 'events': []}
+                continue
+            try:
+                ipc, evts = _extract_from_source(manifest.name, src)
+                per_plugin[manifest.name] = {'actions': ipc, 'events': evts}
+                console.print(
+                    f'  [dim]{manifest.name}:[/dim] '
+                    f'[cyan]{len(ipc)}[/cyan] action(s), '
+                    f'[cyan]{len(evts)}[/cyan] event subscription(s)'
+                )
+            except ValueError as exc:
+                console.print(f'[yellow]  {manifest.name}: {escape(str(exc))}[/yellow]')
+                per_plugin[manifest.name] = {'actions': [], 'events': []}
+
+        # ── --save ────────────────────────────────────────────────
+        if save:
+            from xcore.kernel.schema import ActionSchema
+
+            # Build JSON: { plugin_name: { "actions": {name: schema_dict}, "events": [...] } }
+            snapshot: dict = {}
+            for pname, data in per_plugin.items():
+                actions_dict = {}
+                for s in data['actions']:
+                    # key = action name (short), value = full schema dict
+                    actions_dict[s['action']] = ActionSchema(**s).to_dict()
+                snapshot[pname] = {
+                    'actions': actions_dict,
+                    'events': data['events'],
+                }
+
+            snap_path.parent.mkdir(parents=True, exist_ok=True)
+            snap_path.write_text(json.dumps(snapshot, indent=2), encoding='utf-8')
+            console.print(f'\n[green]✓[/green] Snapshot saved → [dim]{snap_path}[/dim]')
+
+            # Summary tables
+            all_ipc   = [s for d in per_plugin.values() for s in d['actions']]
+            all_events = [e for d in per_plugin.values() for e in d['events']]
+
+            if all_ipc:
+                from rich.table import Table
+                t = Table(title=f'IPC Actions ({len(all_ipc)})')
+                t.add_column('Plugin', style='dim')
+                t.add_column('Action', style='cyan')
+                t.add_column('Version', style='magenta')
+                t.add_column('Input', style='dim')
+                t.add_column('Output', style='dim')
+                for s in sorted(all_ipc, key=lambda x: (x['plugin'], x['action'])):
+                    t.add_row(
+                        s['plugin'], s['action'], s['version'],
+                        ', '.join(s['input']) or '—',
+                        ', '.join(s['output']) or '—',
+                    )
+                console.print(t)
+            else:
+                console.print('[dim]  No @action-decorated methods found.[/dim]')
+
+            if all_events:
+                from rich.table import Table
+                t = Table(title=f'Event Subscriptions ({len(all_events)})')
+                t.add_column('Plugin', style='dim')
+                t.add_column('Event', style='cyan')
+                t.add_column('Method', style='dim')
+                t.add_column('Priority', style='magenta')
+                for e in sorted(all_events, key=lambda x: (x.get('plugin', ''), x['event'])):
+                    t.add_row(e.get('plugin', '?'), e['event'], e['method'], str(e['priority']))
+                console.print(t)
+
+        # ── --check-breaking ──────────────────────────────────────
+        if check_breaking:
+            from xcore.kernel.schema import ActionSchema, BreakingChangeDetector, SchemaRegistry
+
+            if not snap_path.exists():
+                console.print(
+                    f'[yellow]⚠ No snapshot at [dim]{snap_path}[/dim].\n'
+                    f'  Run with [cyan]--save[/cyan] first.[/yellow]'
+                )
+                raise typer.Exit(1)
+
+            raw: dict = json.loads(snap_path.read_text(encoding='utf-8'))
+
+            # Build previous registry from the per-plugin format
+            previous = SchemaRegistry()
+            prev_events_all: list[dict] = []
+            for pname, pdata in raw.items():
+                prev_actions = pdata.get('actions', {}) if isinstance(pdata, dict) else {}
+                prev_events_all.extend(pdata.get('events', []) if isinstance(pdata, dict) else [])
+                for aname, adict in prev_actions.items():
+                    try:
+                        previous._schemas[f'{pname}:{aname}'] = ActionSchema.from_dict(adict)  # noqa: SLF001
+                    except Exception:
+                        pass
+
+            # Build current registry
+            current = SchemaRegistry()
+            curr_events_all: list[dict] = []
+            for pname, data in per_plugin.items():
+                curr_events_all.extend(data['events'])
+                for s in data['actions']:
+                    current.register(ActionSchema(**s))
+
+            detector = BreakingChangeDetector(previous, current)
+            breaking = detector.detect()
+
+            console.print()
+            if breaking:
+                console.print(f'[red bold]✗ {len(breaking)} breaking change(s) detected:[/red bold]')
+                for change in breaking:
+                    console.print(f'[red]  {escape(str(change))}[/red]')
+            else:
+                console.print('[green]✓[/green] No breaking IPC changes detected.')
+
+            # Event subscription diff (informational, not an error)
+            prev_evt_keys = {(e.get('plugin', ''), e['event']) for e in prev_events_all}
+            curr_evt_keys = {(e.get('plugin', ''), e['event']) for e in curr_events_all}
+            removed = prev_evt_keys - curr_evt_keys
+            added   = curr_evt_keys - prev_evt_keys
+            if removed:
+                console.print('[yellow]  Event subscriptions removed:[/yellow]')
+                for plugin, ev in sorted(removed):
+                    console.print(f'[yellow]    - {escape(plugin)}:{escape(ev)}[/yellow]')
+            if added:
+                console.print('[dim]  Event subscriptions added:[/dim]')
+                for plugin, ev in sorted(added):
+                    console.print(f'[dim]    + {plugin}:{ev}[/dim]')
+
+            if breaking:
+                raise typer.Exit(1)
+
+        if has_error:
             raise typer.Exit(1)
