@@ -13,6 +13,7 @@ _console = Console()
 from xcli.init.manager import _DB_URLS, create_project
 from xcli.init.upgrade import run_upgrade as _run_upgrade
 from xcli.config.cli import app as config_app
+from xcli.deploy.cli import app as deploy_app
 from xcli.manager.cli import app as manager_app
 from xcli.migrations.cli import app as migrations_app
 from xcli.plugin.cli import app as plugin_app
@@ -149,6 +150,7 @@ def services() -> None:
 # ── sub-apps ──────────────────────────────────────────────────
 
 app.add_typer(config_app,  name="config")
+app.add_typer(deploy_app,  name="deploy")
 app.add_typer(plugin_app,  name="plugin")
 app.add_typer(sandbox_app, name="sandbox")
 app.add_typer(worker_app,  name="worker")

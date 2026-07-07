@@ -50,21 +50,57 @@ def _decorator_name(dec: ast.expr) -> str:
     return ''
 
 
-def _extract_from_source(plugin_name: str, source_path: Path) -> tuple[list[dict], list[dict]]:
-    """
-    Parse a plugin source file with AST and extract:
-      - IPC action schemas  (decorated with @action + optional @schema)
-      - Event subscriptions (decorated with @on_event)
+def _is_events_on(node: ast.expr) -> bool:
+    """Return True if node is a call to *.on(...) — matches ctx.events.on, events.on, etc."""
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == 'on'
+    )
 
-    Returns (ipc_schemas, event_subs).
+
+def _scan_inline_events(plugin_name: str, method_body: list, event_subs: list) -> None:
     """
+    Walk a method body (e.g. on_load) and collect event subscriptions registered:
+      1. As a decorator:  @self.ctx.events.on("some.event") / @events.on("some.event")
+      2. As a direct call: self.ctx.events.on("some.event", self._handler)
+    """
+    for stmt in ast.walk(ast.Module(body=method_body, type_ignores=[])):
+        # Pattern 1 — nested function with @*.on("event") decorator
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for dec in stmt.decorator_list:
+                if _is_events_on(dec) and dec.args:
+                    ev = _ast_value(dec.args[0])
+                    if isinstance(ev, str):
+                        event_subs.append({
+                            'plugin': plugin_name,
+                            'event': ev,
+                            'method': stmt.name,
+                            'priority': 50,
+                            'once': False,
+                        })
+        # Pattern 2 — bare call: xxx.on("event", handler)
+        elif isinstance(stmt, ast.Expr) and _is_events_on(stmt.value):
+            call = stmt.value
+            if len(call.args) >= 2:
+                ev = _ast_value(call.args[0])
+                handler = _ast_value(call.args[1])
+                if isinstance(ev, str):
+                    event_subs.append({
+                        'plugin': plugin_name,
+                        'event': ev,
+                        'method': str(handler),
+                        'priority': 50,
+                        'once': False,
+                    })
+
+
+def _extract_from_file(plugin_name: str, source_path: Path, ipc_schemas: list, event_subs: list) -> None:
+    """Parse one file and append found actions/events to the provided lists."""
     try:
         tree = ast.parse(source_path.read_text(encoding='utf-8'), filename=str(source_path))
     except SyntaxError as exc:
         raise ValueError(f'Syntax error in {source_path}: {exc}') from exc
-
-    ipc_schemas: list[dict] = []
-    event_subs: list[dict] = []
 
     for node in ast.walk(tree):
         if not isinstance(node, ast.ClassDef):
@@ -122,11 +158,51 @@ def _extract_from_source(plugin_name: str, source_path: Path) -> tuple[list[dict
 
             if event_name is not None:
                 event_subs.append({
+                    'plugin': plugin_name,
                     'event': event_name,
                     'method': item.name,
                     'priority': event_priority,
                     'once': event_once,
                 })
+
+            # Scan the method body for inline ctx.events.on(...) registrations
+            _scan_inline_events(plugin_name, item.body, event_subs)
+
+
+def _extract_from_source(plugin_name: str, source_path: Path) -> tuple[list[dict], list[dict]]:
+    """
+    Parse a plugin source file (and all sibling .py files in the same directory)
+    with AST and extract:
+      - IPC action schemas  (decorated with @action + optional @schema)
+      - Event subscriptions (decorated with @on_event)
+
+    Scans the entire src directory so that mixin files (e.g. ipc.py, events.py)
+    are included alongside the entry point.
+
+    Returns (ipc_schemas, event_subs).
+    """
+    ipc_schemas: list[dict] = []
+    event_subs: list[dict] = []
+
+    src_dir = source_path.parent
+    py_files = sorted(src_dir.rglob('*.py'))
+    # Always process the entry point first, then the rest
+    ordered = [source_path] + [f for f in py_files if f != source_path]
+    seen_actions: set[str] = set()
+
+    for py_file in ordered:
+        file_ipc: list[dict] = []
+        file_evts: list[dict] = []
+        try:
+            _extract_from_file(plugin_name, py_file, file_ipc, file_evts)
+        except ValueError:
+            continue  # skip files with syntax errors silently
+        for entry in file_ipc:
+            key = entry['action']
+            if key not in seen_actions:
+                seen_actions.add(key)
+                ipc_schemas.append(entry)
+        event_subs.extend(file_evts)
 
     return ipc_schemas, event_subs
 
