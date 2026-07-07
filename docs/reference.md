@@ -21,6 +21,35 @@ A comprehensive list of all commands available in `xcorecli`.
 - `manager services reload`: Reconnect a service.
 - `manager services unload`: Shutdown a service.
 
+## `deploy`  Production Deployment
+
+- `deploy init`: Generate a `xcore-deploy.yaml` template file.
+- `deploy list`: Show targets, plugins, extensions, and hooks declared in the config.
+- `deploy <target>`: Deploy integration.yaml + extensions + plugins to a remote server.
+- `deploy status <target>`: Show plugin state on a remote server via the XCore API.
+
+**Key options for `deploy <target>`:**
+
+| Option | Description |
+|---|---|
+| `--plugin <name>` | Deploy only one plugin (skips extensions + integration) |
+| `--dry-run` | Simulate without sending anything |
+| `--no-reload` | Transfer files without triggering reload/restart |
+| `--file <path>` | Use an alternate config file |
+
+**Deploy order:** `integration.yaml` → extensions (services) → plugins
+
+**Sources:** each plugin/extension accepts `source: ./local/path` OR `repo: https://github.com/org/repo` (public), with optional `token: "${GITHUB_TOKEN}"` for private repos or `git@github.com:...` SSH URLs.
+
+**Hook levels:**
+
+| Level | Keys | When |
+|---|---|---|
+| Global | `hooks.pre_deploy` / `hooks.post_deploy` | Once per full deploy run |
+| Per-plugin/extension | `hooks.pre_deploy` / `post_deploy` | Before/after each item |
+
+---
+
 ## `plugin`  Lifecycle
 
 - `plugin info`: Detailed local plugin report.
