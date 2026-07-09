@@ -352,6 +352,28 @@ def transfer_integration_yaml(
         return False
 
 
+def transfer_file(target: "Target", source: Path, remote_path: str, dry_run: bool) -> bool:
+    """Transfère un fichier unique vers le serveur distant via SFTP."""
+    if dry_run:
+        console.print(f"    [dim]▷ (dry-run) sftp {source.name} → {target.host}:{remote_path}[/dim]")
+        return True
+
+    try:
+        client = _ssh_client(target)
+        sftp = client.open_sftp()
+
+        remote_dir = str(Path(remote_path).parent)
+        _ssh_exec(client, f"mkdir -p {remote_dir}")
+
+        sftp.put(str(source), remote_path)
+        sftp.close()
+        client.close()
+        return True
+    except Exception as e:
+        console.print(f"    [red]✗[/red] SSH erreur : {escape(str(e))}")
+        return False
+
+
 def restart_xcore_service(target: "Target", dry_run: bool) -> bool:
     """Redémarre le service xcore via systemctl (ou supervisorctl)."""
     if dry_run:
@@ -398,12 +420,15 @@ class DeployRunner:
         plugins = self._cfg.plugins_for_target(target.name)
         extensions = self._cfg.extensions_for_target(target.name)
         integration = self._cfg.integration_for_target(target.name)
+        files = self._cfg.files_for_target(target.name)
 
         if self._plugin_filter:
             plugins = [p for p in plugins if p.name == self._plugin_filter]
             if not plugins:
                 console.print(f"[red]Plugin '{self._plugin_filter}' introuvable dans la config.[/red]")
                 return False
+            extensions = []
+            integration = None
 
         console.print(
             f"\n[bold]Déploiement → [cyan]{target.name}[/cyan] "
@@ -427,6 +452,11 @@ class DeployRunner:
             if integration:
                 ok, elapsed = self._deploy_integration(integration, tmp)
                 results.append(("integration.yaml", "config", ok, elapsed))
+
+            # ── Fichiers (config, .env, etc.)
+            for file_entry in files:
+                ok, elapsed = self._deploy_file(file_entry)
+                results.append((file_entry.source, "file", ok, elapsed))
 
             # ── Extensions (services)
             for ext in extensions:
@@ -598,6 +628,24 @@ class DeployRunner:
 
         elapsed = time.monotonic() - t0
         console.print(f"  [green]✓[/green] [bold]integration.yaml[/bold] synchronisé en {elapsed:.1f}s")
+        return True, elapsed
+
+    def _deploy_file(self, file_entry) -> tuple[bool, float]:
+        t0 = time.monotonic()
+        console.print(f"\n[bold blue]Fichier : {file_entry.source}[/bold blue]")
+
+        source = (self._root / file_entry.source).resolve()
+        if not source.exists():
+            console.print(f"  [red]✗[/red] Fichier introuvable : {source}")
+            return False, time.monotonic() - t0
+
+        console.print(f"  [dim]▷[/dim] Transfert…")
+        ok = transfer_file(self._target, source, file_entry.dest, self._dry_run)
+        if not ok:
+            return False, time.monotonic() - t0
+
+        elapsed = time.monotonic() - t0
+        console.print(f"  [green]✓[/green] [bold]{file_entry.source}[/bold] → {file_entry.dest} ({elapsed:.1f}s)")
         return True, elapsed
 
     def _sign_plugin(self, source: Path) -> bool:

@@ -12,17 +12,20 @@ from typing import Any
 import yaml
 
 _ENV_RE = re.compile(r"\$\{([^}]+)\}")
+_ENV_RE_OLD = re.compile(r"(?<!\$)\{([A-Z_][A-Z0-9_]*)\}")
 
 
 def _interpolate(value: str) -> str:
-    """Remplace ${VAR} par la valeur de l'env système."""
+    """Remplace ${VAR} ou {VAR} par la valeur de l'env système."""
     def _replace(m: re.Match) -> str:
         key = m.group(1)
         val = os.environ.get(key)
         if val is None:
             raise ValueError(f"Variable d'environnement manquante : ${{{key}}}")
         return val
-    return _ENV_RE.sub(_replace, value)
+    result = _ENV_RE.sub(_replace, value)
+    result = _ENV_RE_OLD.sub(_replace, result)
+    return result
 
 
 @dataclass
@@ -136,6 +139,22 @@ class ExtensionEntry:
 
 
 @dataclass
+class FileEntry:
+    """Fichier à copier sur le serveur distant."""
+    source: str
+    dest: str
+    only: list[str] = field(default_factory=list)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "FileEntry":
+        return cls(
+            source=d["source"],
+            dest=d["dest"],
+            only=d.get("only", []),
+        )
+
+
+@dataclass
 class IntegrationConfig:
     """Synchronisation de integration.yaml vers le(s) serveur(s) distant(s)."""
     source: str                    # chemin local du fichier
@@ -210,6 +229,7 @@ class DeployConfig:
     extensions: list[ExtensionEntry]
     integration: IntegrationConfig | None
     hooks: GlobalHooks
+    files: list[FileEntry] = field(default_factory=list)
 
     @classmethod
     def load(cls, path: Path) -> "DeployConfig":
@@ -235,12 +255,15 @@ class DeployConfig:
             else None
         )
 
+        files = [FileEntry.from_dict(f) for f in raw.get("files", [])]
+
         return cls(
             targets=targets,
             plugins=plugins,
             extensions=extensions,
             integration=integration,
             hooks=GlobalHooks.from_dict(raw.get("hooks")),
+            files=files,
         )
 
     def get_target(self, name: str) -> Target:
@@ -254,6 +277,9 @@ class DeployConfig:
 
     def extensions_for_target(self, target_name: str) -> list[ExtensionEntry]:
         return [e for e in self.extensions if not e.only or target_name in e.only]
+
+    def files_for_target(self, target_name: str) -> list[FileEntry]:
+        return [f for f in self.files if not f.only or target_name in f.only]
 
     def integration_for_target(self, target_name: str) -> IntegrationConfig | None:
         if not self.integration:
