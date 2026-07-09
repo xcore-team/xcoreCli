@@ -483,3 +483,56 @@ def copy(
         console.print(f"\n[green]✓[/green] [bold]{source}[/bold] → [dim]{target.host}:{dest}[/dim]")
     else:
         raise typer.Exit(1)
+
+
+# ── xcli deploy generate ─────────────────────────────────────────────────────
+
+
+@app.command("generate")
+def generate(
+    output: str = typer.Option("xcore-deploy.yaml", "--output", "-o", help="Fichier de sortie"),
+    plugins_dir: str = typer.Option("./app", "--plugins-dir", "-p", help="Répertoire des plugins"),
+    extensions_dir: str = typer.Option("./extensions", "--extensions-dir", "-e", help="Répertoire des extensions"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Affiche le résultat sans écrire"),
+) -> None:
+    """
+    Scanne le projet et génère xcore-deploy.yaml automatiquement.
+
+    Détecte les plugins (plugin.yaml), extensions (__init__.py) et
+    integration.yaml, puis produit un fichier de déploiement prêt à l'emploi.
+    Si le fichier existe déjà, les targets et hooks sont conservés.
+    """
+    from .generate import generate_config, load_existing, format_config
+
+    out = Path(output).resolve()
+    project_root = Path.cwd()
+
+    existing_candidates = [out, project_root / "xcore-deploy.yaml", project_root / "deploy" / "xcore-deploy.yaml"]
+    existing = {}
+    for candidate in existing_candidates:
+        if candidate.exists():
+            existing = load_existing(candidate)
+            break
+
+    config = generate_config(
+        project_root=project_root,
+        plugins_dir=plugins_dir,
+        extensions_dir=extensions_dir,
+        existing=existing,
+    )
+    yaml_output = format_config(config)
+
+    if dry_run:
+        console.print("[yellow]--- dry-run ---[/yellow]")
+        console.print(yaml_output)
+        return
+
+    out.write_text(yaml_output, encoding="utf-8")
+    plugins_count = len(config.get("plugins", []))
+    extensions_count = len(config.get("extensions", []))
+    console.print(f"[green]✓[/green] Fichier généré : [dim]{out}[/dim]")
+    console.print(f"   [cyan]{plugins_count}[/cyan] plugins, [cyan]{extensions_count}[/cyan] extensions détectés")
+    if config.get("integration"):
+        console.print("   integration.yaml [green]✓[/green]")
+    if existing.get("targets"):
+        console.print(f"   Targets conservés : [cyan]{', '.join(existing['targets'])}[/cyan]")
