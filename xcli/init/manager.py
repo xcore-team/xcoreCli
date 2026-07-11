@@ -263,9 +263,3 @@ def _write(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
 
-
-# ── Legacy wizard (kept for backward compat) ──────────────────
-
-def _app() -> None:
-    """Kept for backward compatibility — now delegates to xcli init <name>."""
-    console.print("[yellow]Conseil :[/yellow] utilisez [cyan]xcli init <nom-du-projet>[/cyan] directement.")

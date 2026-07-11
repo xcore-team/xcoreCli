@@ -300,6 +300,9 @@ def metrics(
 # ── services list ─────────────────────────────────────────────
 
 async def _fetch_services() -> tuple[dict, dict]:
+    from xcli._xcore import _require_xcore
+    _require_xcore()
+
     from xcore.configurations.loader import ConfigLoader
     from xcore.services import ServiceContainer
 
@@ -381,6 +384,9 @@ def services_list(
 def services_reload(name: str = typer.Argument(..., help="Service name (e.g. db, cache, scheduler)")) -> None:
     """Force a service to re-read its configuration and reconnect."""
     async def _reload():
+        from xcli._xcore import _require_xcore
+        _require_xcore()
+
         from xcore.configurations.loader import ConfigLoader
         from xcore.services import ServiceContainer
 
@@ -415,6 +421,9 @@ def services_reload(name: str = typer.Argument(..., help="Service name (e.g. db,
 def services_unload(name: str = typer.Argument(..., help="Service name to disable")) -> None:
     """Temporarily disable a service without restarting the application."""
     async def _unload():
+        from xcli._xcore import _require_xcore
+        _require_xcore()
+
         from xcore.configurations.loader import ConfigLoader
         from xcore.services import ServiceContainer
 

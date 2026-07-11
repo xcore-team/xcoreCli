@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Optional
 
 import typer
@@ -8,11 +9,14 @@ import yaml
 from rich.table import Table
 from typer import Typer
 
+from xcli._xcore import _require_xcore
+
 from .install_commands import _install_from_url
 from .shared import console, plugins_dir
 
 
 def _marketplace_client():
+    _require_xcore()
     from xcore.configurations.loader import ConfigLoader
     from xcore.marketplace import MarketplaceClient
 
@@ -43,6 +47,7 @@ def _fetch_latest(client, name: str) -> tuple[str | None, str | None, str | None
 
 def _do_update(name: str, target_version: str | None, dry_run: bool) -> None:
     import shutil
+    import tempfile
 
     current = _installed_version(name)
     client = _marketplace_client()
@@ -73,9 +78,24 @@ def _do_update(name: str, target_version: str | None, dry_run: bool) -> None:
         return
 
     plugin_path = plugins_dir() / name
+    backup_dir: Path | None = None
     if plugin_path.exists():
+        backup_dir = Path(tempfile.mkdtemp(prefix=f"{name}_backup_"))
+        shutil.copytree(plugin_path, backup_dir / name)
         shutil.rmtree(plugin_path)
-    _install_from_url(name, url, source_type)
+    try:
+        _install_from_url(name, url, source_type)
+    except Exception as exc:
+        if backup_dir is not None and backup_dir.exists():
+            shutil.rmtree(plugin_path, ignore_errors=True)
+            shutil.copytree(backup_dir / name, plugin_path)
+            console.print(f'[yellow]⚠[/yellow] Restored [cyan]{name}[/cyan] from backup.')
+        if backup_dir is not None:
+            shutil.rmtree(backup_dir, ignore_errors=True)
+        console.print(f'[red]✗[/red] Update failed: {exc}')
+        raise typer.Exit(1) from exc
+    if backup_dir is not None:
+        shutil.rmtree(backup_dir, ignore_errors=True)
     console.print(f'[green]✓[/green] Updated [cyan]{name}[/cyan] to [magenta]{resolved_version}[/magenta].')
 
 
