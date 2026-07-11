@@ -19,6 +19,9 @@ err = Console(stderr=True)
 
 
 def _load_manifest(name: str):
+    from xcli._xcore import _require_xcore
+    _require_xcore()
+
     from xcore.configurations.loader import ConfigLoader
     from xcore.kernel.security.validation import ManifestValidator
 

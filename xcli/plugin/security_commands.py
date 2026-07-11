@@ -224,6 +224,26 @@ def _default_schema_path(project_root: Path) -> Path:
     return project_root / '.xcore' / 'schemas.json'
 
 
+def _read_events_emitted(plugin_path: Path) -> dict:
+    """
+    Lit `events_emitted` depuis plugin.yaml.
+
+    Ces événements sont déclaratifs (pas extractibles par AST) : ils décrivent ce
+    que le plugin émet, avec leur payload_schema. Le catalogue d'événements de
+    xflow s'appuie dessus pour proposer les déclencheurs.
+    """
+    manifest_file = plugin_path / 'plugin.yaml'
+    if not manifest_file.exists():
+        return {}
+    try:
+        import yaml
+        data = yaml.safe_load(manifest_file.read_text(encoding='utf-8')) or {}
+    except Exception:
+        return {}
+    emitted = data.get('events_emitted') or {}
+    return emitted if isinstance(emitted, dict) else {}
+
+
 # ── Single-plugin validation helper ────────────────────────────
 
 
@@ -367,27 +387,31 @@ def register(app: Typer) -> None:
 
         # ── Extract schemas from source (AST) — grouped by plugin ──
         console.print()
-        # { plugin_name: {"actions": [...], "events": [...]} }
+        # { plugin_name: {"actions": [...], "events": [...], "events_emitted": {...}} }
         per_plugin: dict[str, dict] = {}
 
         for manifest, pdir in valid_plugins:
+            # Déclaratif : lu depuis plugin.yaml, indépendant de l'entry point.
+            emitted = _read_events_emitted(pdir)
+
             entry_attr = getattr(manifest, 'entry_point', 'src/main.py')
             src = _find_entry_point(pdir, entry_attr)
             if src is None:
                 console.print(f'[yellow]  {manifest.name}: entry point not found — skipping[/yellow]')
-                per_plugin[manifest.name] = {'actions': [], 'events': []}
+                per_plugin[manifest.name] = {'actions': [], 'events': [], 'events_emitted': emitted}
                 continue
             try:
                 ipc, evts = _extract_from_source(manifest.name, src)
-                per_plugin[manifest.name] = {'actions': ipc, 'events': evts}
+                per_plugin[manifest.name] = {'actions': ipc, 'events': evts, 'events_emitted': emitted}
                 console.print(
                     f'  [dim]{manifest.name}:[/dim] '
                     f'[cyan]{len(ipc)}[/cyan] action(s), '
-                    f'[cyan]{len(evts)}[/cyan] event subscription(s)'
+                    f'[cyan]{len(evts)}[/cyan] event subscription(s), '
+                    f'[cyan]{len(emitted)}[/cyan] event(s) emitted'
                 )
             except ValueError as exc:
                 console.print(f'[yellow]  {manifest.name}: {escape(str(exc))}[/yellow]')
-                per_plugin[manifest.name] = {'actions': [], 'events': []}
+                per_plugin[manifest.name] = {'actions': [], 'events': [], 'events_emitted': emitted}
 
         # ── --save ────────────────────────────────────────────────
         if save:
@@ -403,6 +427,7 @@ def register(app: Typer) -> None:
                 snapshot[pname] = {
                     'actions': actions_dict,
                     'events': data['events'],
+                    'events_emitted': data.get('events_emitted', {}),
                 }
 
             snap_path.parent.mkdir(parents=True, exist_ok=True)

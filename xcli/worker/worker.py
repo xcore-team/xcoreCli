@@ -548,18 +548,18 @@ def handle_worker(args: Any) -> None:
         table.add_column("Description")
 
         rows = [
-            ("xcore worker start [api|celery]", "Lance API et/ou Celery worker"),
-            ("xcore worker stop  [api|celery]", "Arrête les processus en cours"),
-            ("xcore worker status", "Affiche l'état des processus"),
-            ("xcore worker logs  [api|celery]", "Affiche les dernières lignes de log"),
-            ("xcore worker inspect", "Liste les tâches et workers actifs"),
-            ("xcore worker purge [queue]", "Vide une file d'attente Celery"),
-            ("xcore worker beat", "Lance le scheduler Celery Beat"),
+            ("xcli worker start [api|celery]", "Lance API et/ou Celery worker"),
+            ("xcli worker stop  [api|celery]", "Arrête les processus en cours"),
+            ("xcli worker status", "Affiche l'état des processus"),
+            ("xcli worker logs  [api|celery]", "Affiche les dernières lignes de log"),
+            ("xcli worker inspect", "Liste les tâches et workers actifs"),
+            ("xcli worker purge [queue]", "Vide une file d'attente Celery"),
+            ("xcli worker beat", "Lance le scheduler Celery Beat"),
         ]
         for cmd, desc in rows:
             table.add_row(cmd, desc)
 
         console.print(table)
         console.print(
-            "\n[dim]Exemple : xcore worker start --detach -Q default,emails -c 4[/dim]"
+            "\n[dim]Exemple : xcli worker start --detach -Q default,emails -c 4[/dim]"
         )
