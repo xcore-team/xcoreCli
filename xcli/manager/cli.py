@@ -138,6 +138,57 @@ def _build_resources_table() -> Table:
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             pass
 
+    # Plugins en mode "trusted"/"sandboxed(threaded)" tournent DANS le
+    # process API principal (pas de sous-process dédié) — donc pas de PID
+    # à eux. Plutôt que d'afficher des tirets, on retombe sur le process
+    # API (retrouvé via le PID file écrit par `xcli manager start`, ou à
+    # défaut par scan cmdline) et on l'affiche comme ressource *partagée*.
+    main_proc: psutil.Process | None = None
+    try:
+        from xcli.worker.worker import PID_API, _is_running, _read_pid
+
+        main_pid = _read_pid(PID_API)
+        if main_pid and _is_running(main_pid):
+            main_proc = psutil.Process(main_pid)
+    except Exception:
+        main_proc = None
+
+    if main_proc is None:
+        # Pas de PID file (démarrage en foreground sans --detach, ou
+        # process lancé hors xcli) — on cherche le process uvicorn qui
+        # sert l'app, en excluant les sandbox workers déjà identifiés.
+        sandboxed_pids = {p.pid for p in sandbox_pids.values()}
+        for proc in psutil.process_iter(["pid", "cmdline"]):
+            if proc.pid in sandboxed_pids:
+                continue
+            try:
+                cmd = proc.info["cmdline"] or []
+                if any("uvicorn" in str(c) for c in cmd):
+                    main_proc = proc
+                    break
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+
+    main_cpu_str = main_mem_str = main_conn_str = "—"
+    main_pid_str = "—"
+    if main_proc is not None:
+        try:
+            main_pid_str = str(main_proc.pid)
+            cpu = main_proc.cpu_percent(interval=0.05)
+            cpu_color = "red" if cpu > 80 else ("yellow" if cpu > 40 else "green")
+            main_cpu_str = f"[{cpu_color}]{cpu:.1f}[/{cpu_color}]"
+
+            mem = main_proc.memory_info().rss / 1024**2
+            mem_color = "red" if mem > 400 else ("yellow" if mem > 200 else "magenta")
+            main_mem_str = f"[{mem_color}]{mem:.1f}[/{mem_color}]"
+
+            try:
+                main_conn_str = str(len(main_proc.net_connections()))
+            except (psutil.AccessDenied, AttributeError):
+                main_conn_str = "?"
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            main_proc = None
+
     table = Table(title=f"Plugin Resources  [dim]{plugins_root}[/dim]", show_lines=True)
     table.add_column("Plugin", style="cyan", no_wrap=True)
     table.add_column("Mode", justify="center")
@@ -196,8 +247,24 @@ def _build_resources_table() -> Table:
                 state_str = "[green]running[/green]" if state == "running" else f"[yellow]{state}[/yellow]"
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 state_str = "[red]gone[/red]"
+        elif main_proc is not None:
+            # Plugin en process partagé (trusted / non-sandboxé) : on
+            # affiche les métriques du process API, avec un marqueur "~"
+            # pour signaler que c'est une valeur partagée entre plugins,
+            # pas exclusive à celui-ci.
+            pid_str = f"~{main_pid_str}"
+            cpu_str = main_cpu_str
+            mem_str = main_mem_str
+            conn_str = main_conn_str
+            state_str = "[cyan]in-process[/cyan] [dim](partagé)[/dim]"
 
         table.add_row(name, mode, pid_str, cpu_str, mem_str, disk_str, conn_str, state_str)
+
+    if main_proc is not None and any(name not in sandbox_pids for name in plugin_names):
+        table.caption = (
+            "[dim]~PID = process API partagé entre plugins \"in-process (partagé)\" — "
+            "CPU/Mem/Net Conn reflètent le process entier, pas ce plugin seul.[/dim]"
+        )
 
     return table
 
@@ -595,12 +662,19 @@ def start(
 
     console.print(f"[dim]→ uvicorn {app_path} --host {resolved_host} --port {resolved_port}[/dim]")
     console.print("[dim]Ctrl+C to stop[/dim]\n")
+    PID_DIR.mkdir(parents=True, exist_ok=True)
     try:
         proc = subprocess.Popen(cmd)
+        # Écrit le PID même en foreground : `xcli manager resources`/`top`
+        # dans un autre terminal en a besoin pour retrouver le process API
+        # (plugins "trusted" partagent ce process, pas de PID dédié).
+        _write_pid(PID_API, proc.pid)
         proc.wait()
     except KeyboardInterrupt:
         proc.terminate()
         proc.wait()
+    finally:
+        PID_API.unlink(missing_ok=True)
 
 
 @app.command("stop")
