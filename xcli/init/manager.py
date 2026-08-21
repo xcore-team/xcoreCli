@@ -111,8 +111,9 @@ security:
     period_seconds: 60
 
 marketplace:
-  url: "https://marketplace.xcore.dev"
-  api_url: "https://api.xcorehub.dev"
+  # Toujours inclure le schéma — utilisée telle quelle comme base d'URL HTTP
+  # par xcli et xcore.marketplace.MarketplaceClient.
+  url: "https://marketplace.xcorehub.dev"
   timeout: 10
   cache_ttl: 300
 """

@@ -1,46 +1,36 @@
 from __future__ import annotations
 
-import asyncio
-from typing import Any
+from typing import Any, Optional
 
+import httpx
 import typer
 from typer import Typer
 
-from .shared import console
+from .shared import console, marketplace_api_base
+
+# Contrat réel du backend (app/marketplace/src/routes/plugins.py) — pas le
+# client générique xcore.marketplace.MarketplaceClient, dont le contrat
+# suppose des routes (/plugins/trending, /plugins/search, /plugins/{name}/
+# versions) qui n'existent pas côté serveur : recherche et tri sont des
+# query params sur GET /plugins, pas des sous-routes ; les versions sont
+# imbriquées dans la réponse de GET /plugins/{slug}, pas un endpoint séparé.
+_LIST_PATH = '/app/marketplace/plugins'
 
 
-def _client():
-    from xcli._xcore import _require_xcore
-    _require_xcore()
-    from xcore.configurations.loader import ConfigLoader
-    from xcore.marketplace import MarketplaceClient
-
-    return MarketplaceClient(ConfigLoader.load(None))
-
-
-def _normalize_plugins(payload: Any) -> list[dict[str, Any]]:
-    if payload is None:
-        return []
-    if isinstance(payload, list):
-        items = payload
-    elif isinstance(payload, dict):
-        for key in ('items', 'plugins', 'results', 'data'):
-            value = payload.get(key)
-            if isinstance(value, list):
-                items = value
-                break
-        else:
-            items = [payload]
-    else:
-        items = [payload]
-
-    normalized: list[dict[str, Any]] = []
-    for item in items:
-        if isinstance(item, dict):
-            normalized.append(item)
-        else:
-            normalized.append({'name': str(item), 'version': '?', 'author': '—', 'description': ''})
-    return normalized
+def _get(path: str, params: dict[str, Any] | None = None) -> Any:
+    url = f'{marketplace_api_base()}{path}'
+    try:
+        resp = httpx.get(url, params=params, timeout=15, follow_redirects=True)
+        resp.raise_for_status()
+        return resp.json()
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 404:
+            return None
+        console.print(f'[red]HTTP {exc.response.status_code}:[/red] {url}')
+        raise typer.Exit(1)
+    except httpx.RequestError as exc:
+        console.print(f'[red]Network error:[/red] {exc}')
+        raise typer.Exit(1)
 
 
 def _table(plugins: list[dict[str, Any]], title: str) -> None:
@@ -48,66 +38,80 @@ def _table(plugins: list[dict[str, Any]], title: str) -> None:
 
     table = Table(title=title)
     table.add_column('Name', style='cyan')
-    table.add_column('Version', style='magenta')
-    table.add_column('Author', style='dim')
+    table.add_column('Slug', style='dim')
+    table.add_column('Latest', style='magenta')
+    table.add_column('Rating', justify='right')
+    table.add_column('Downloads', justify='right')
     table.add_column('Description')
     for plugin in plugins:
+        rating = plugin.get('avg_rating') or 0
         table.add_row(
-            str(plugin.get('name') or plugin.get('slug', '?')),
-            str(plugin.get('version', '?')),
-            str(plugin.get('author', '—')),
-            str(plugin.get('description', '')),
+            str(plugin.get('name', '?')),
+            str(plugin.get('slug', '?')),
+            str(plugin.get('latest_version') or '—'),
+            f"{rating:.1f}" if rating else '—',
+            str(plugin.get('download_count', 0)),
+            str(plugin.get('description') or ''),
         )
     console.print(table)
 
 
 def register(app: Typer) -> None:
     @app.command('browse')
-    def browse() -> None:
-        """List all plugins available on the marketplace."""
+    def browse(
+        sort: str = typer.Option('newest', '--sort', help='newest | downloads | rating'),
+        limit: int = typer.Option(20, '--limit', min=1, max=200),
+        category_id: Optional[str] = typer.Option(None, '--category', help='Filter by category id'),
+    ) -> None:
+        """List plugins published on the marketplace."""
+        if sort not in ('newest', 'downloads', 'rating'):
+            console.print(f"[red]Invalid --sort '{sort}'.[/red] Use: newest | downloads | rating")
+            raise typer.Exit(1)
         with console.status('Fetching marketplace plugins...'):
-            plugins = _normalize_plugins(asyncio.run(_client().list_plugins()))
-        if not plugins:
+            data = _get(_LIST_PATH, {'sort': sort, 'limit': limit, 'category_id': category_id})
+        items = (data or {}).get('items', [])
+        if not items:
             console.print('[yellow]No plugins found on marketplace.[/yellow]')
             return
-        _table(plugins, f'Marketplace Plugins ({len(plugins)})')
-
-    @app.command('trending')
-    def trending() -> None:
-        """Show trending plugins on the marketplace."""
-        with console.status('Fetching trending plugins...'):
-            plugins = _normalize_plugins(asyncio.run(_client().trending()))
-        if not plugins:
-            console.print('[yellow]No trending plugins.[/yellow]')
-            return
-        _table(plugins, 'Trending Plugins')
+        total = data.get('total', len(items))
+        _table(items, f'Marketplace Plugins ({len(items)} of {total}, sort={sort})')
 
     @app.command('search')
-    def search(query: str) -> None:
-        """Search the marketplace for plugins by keyword or tag."""
+    def search(
+        query: str,
+        limit: int = typer.Option(20, '--limit', min=1, max=200),
+    ) -> None:
+        """Search the marketplace by name or description."""
         with console.status(f"Searching for '[cyan]{query}[/cyan]'..."):
-            results = _normalize_plugins(asyncio.run(_client().search(query)))
-        if not results:
+            data = _get(_LIST_PATH, {'search': query, 'limit': limit})
+        items = (data or {}).get('items', [])
+        if not items:
             console.print(f"[yellow]No results for '[cyan]{query}[/cyan]'.[/yellow]")
             return
-        _table(results, f'Search results — {query}')
+        _table(items, f'Search results — {query}')
 
     @app.command('info')
-    def info(name: str) -> None:
+    def info(slug: str) -> None:
         """Show full details for a marketplace plugin before installing."""
         from rich.markup import escape
         from rich.panel import Panel
 
-        with console.status(f'Fetching [cyan]{name}[/cyan]...'):
-            data = asyncio.run(_client().get_plugin(name))
+        with console.status(f'Fetching [cyan]{slug}[/cyan]...'):
+            data = _get(f'{_LIST_PATH}/{slug}')
         if not data:
-            console.print(f"[red]Plugin '[cyan]{name}[/cyan]' not found on marketplace.[/red]")
+            console.print(f"[red]Plugin '[cyan]{slug}[/cyan]' not found on marketplace.[/red]")
             raise typer.Exit(1)
-        lines = [f'[cyan]{key}:[/] {escape(str(value))}' for key, value in data.items()]
-        console.print(Panel('\n'.join(lines), title=f'[bold]{escape(name)}[/]', border_style='cyan'))
 
-    @app.command('rate')
-    def rate(name: str, score: int = typer.Option(..., min=1, max=5, help='Score 1–5')) -> None:
-        """Rate a marketplace plugin (1–5 stars)."""
-        asyncio.run(_client().rate_plugin(name, score=score))
-        console.print(f'[green]✓[/green] Rated [cyan]{name}[/cyan] [magenta]{score}/5[/magenta].')
+        versions = data.get('versions') or []
+        lines = [
+            f'[cyan]description:[/] {escape(str(data.get("description") or "—"))}',
+            f'[cyan]latest_version:[/] {escape(str(data.get("latest_version") or "—"))}',
+            f'[cyan]rating:[/] {data.get("avg_rating", 0):.1f} ({data.get("rating_count", 0)} ratings)',
+            f'[cyan]downloads:[/] {data.get("download_count", 0)}',
+            f'[cyan]visibility:[/] {escape(str(data.get("visibility", "public")))}',
+            f'[cyan]homepage:[/] {escape(str(data.get("homepage") or "—"))}',
+            f'[cyan]repository:[/] {escape(str(data.get("repository") or "—"))}',
+            f'[cyan]versions ({len(versions)}):[/] ' + ', '.join(v.get('version', '?') for v in versions[:10]),
+        ]
+        console.print(Panel('\n'.join(lines), title=f'[bold]{escape(slug)}[/]', border_style='cyan'))
+        console.print(f'\n[dim]Install: xcli plugin install {slug}[/dim]')

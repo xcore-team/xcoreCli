@@ -14,7 +14,7 @@ app = Typer(help='Plugin lifecycle management.', context_settings=_CTX)
 # ── Sub-groups ────────────────────────────────────────────────
 local_app       = Typer(help='Local plugin development (scaffold, link, list).', context_settings=_CTX)
 runtime_app     = Typer(help='Runtime control (load, unload, reload, status).', context_settings=_CTX)
-marketplace_app = Typer(help='Explore and rate marketplace plugins.', context_settings=_CTX)
+marketplace_app = Typer(help='Browse and search marketplace plugins.', context_settings=_CTX)
 security_app    = Typer(help='Sign and verify plugin integrity.', context_settings=_CTX)
 update_app      = Typer(help='Check and apply plugin updates.', context_settings=_CTX)
 
@@ -28,6 +28,6 @@ app.add_typer(update_app,      name='update')
 register_install_commands(app)      # xcli plugin install / versions / remove / info / health
 register_local_commands(local_app)          # xcli plugin local scaffold / link / unlink / list
 register_runtime_commands(runtime_app)      # xcli plugin runtime load / unload / reload / reload-all / status / call
-register_marketplace_commands(marketplace_app)  # xcli plugin marketplace browse / search / info / trending / rate
+register_marketplace_commands(marketplace_app)  # xcli plugin marketplace browse / search / info
 register_security_commands(security_app)    # xcli plugin security sign / verify / validate
 register_update_commands(update_app)        # xcli plugin update check / <name> --all --dry-run

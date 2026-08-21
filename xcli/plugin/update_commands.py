@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 from typing import Optional
 
@@ -9,18 +8,9 @@ import yaml
 from rich.table import Table
 from typer import Typer
 
-from xcli._xcore import _require_xcore
-
-from .install_commands import _install_from_url
+from .install_commands import _marketplace_install
+from .marketplace_commands import _LIST_PATH, _get
 from .shared import console, plugins_dir
-
-
-def _marketplace_client():
-    _require_xcore()
-    from xcore.configurations.loader import ConfigLoader
-    from xcore.marketplace import MarketplaceClient
-
-    return MarketplaceClient(ConfigLoader.load(None))
 
 
 def _installed_version(name: str) -> str | None:
@@ -34,15 +24,30 @@ def _installed_version(name: str) -> str | None:
         return None
 
 
-def _fetch_latest(client, name: str) -> tuple[str | None, str | None, str | None]:
-    """Returns (version, download_url, source_type) from marketplace."""
-    async def _get():
-        data = await client.get_plugin(name)
-        if not data:
-            return None, None, None
-        return data.get('version'), data.get('download_url'), data.get('source_type', 'zip')
+def _resolve_version(name: str, target_version: str | None) -> str:
+    """Resolve 'latest'/omitted to the actual latest version, or confirm a
+    specific --version exists — both read from GET /plugins/{slug} (see
+    marketplace_commands._get), the same public endpoint browse/search/info
+    use. There is no separate download_url returned anywhere: the real
+    download always goes through the signed /install endpoint, handled by
+    _marketplace_install (install_commands.py) — never duplicated here."""
+    data = _get(f'{_LIST_PATH}/{name}')
+    if not data:
+        console.print(f'[red]Plugin [cyan]{name}[/cyan] not found on marketplace.[/red]')
+        raise typer.Exit(1)
 
-    return asyncio.run(_get())
+    if target_version and target_version != 'latest':
+        versions = {v.get('version') for v in (data.get('versions') or [])}
+        if target_version not in versions:
+            console.print(f'[red]Version {target_version} not found for [cyan]{name}[/cyan].[/red]')
+            raise typer.Exit(1)
+        return target_version
+
+    latest = data.get('latest_version')
+    if not latest:
+        console.print(f'[red]No published version found for [cyan]{name}[/cyan].[/red]')
+        raise typer.Exit(1)
+    return latest
 
 
 def _do_update(name: str, target_version: str | None, dry_run: bool) -> None:
@@ -50,24 +55,7 @@ def _do_update(name: str, target_version: str | None, dry_run: bool) -> None:
     import tempfile
 
     current = _installed_version(name)
-    client = _marketplace_client()
-
-    async def _resolve() -> tuple[str | None, str | None, str]:
-        if target_version and target_version != 'latest':
-            versions = await client.get_versions(name)
-            match = next((item for item in versions if item.get('version') == target_version), None)
-            if not match:
-                console.print(f'[red]Version {target_version} not found for [cyan]{name}[/cyan].[/red]')
-                raise typer.Exit(1)
-            return match['download_url'], match.get('source_type', 'zip'), match['version']
-
-        data = await client.get_plugin(name)
-        if not data:
-            console.print(f'[red]Plugin [cyan]{name}[/cyan] not found on marketplace.[/red]')
-            raise typer.Exit(1)
-        return data.get('download_url'), data.get('source_type', 'zip'), data.get('version', 'latest')
-
-    url, source_type, resolved_version = asyncio.run(_resolve())
+    resolved_version = _resolve_version(name, target_version)
 
     if current == resolved_version:
         console.print(f'[green]{name}[/green] already at [magenta]{resolved_version}[/magenta].')
@@ -82,9 +70,10 @@ def _do_update(name: str, target_version: str | None, dry_run: bool) -> None:
     if plugin_path.exists():
         backup_dir = Path(tempfile.mkdtemp(prefix=f"{name}_backup_"))
         shutil.copytree(plugin_path, backup_dir / name)
-        shutil.rmtree(plugin_path)
+        # _marketplace_install clears plugin_path itself before extracting —
+        # no rmtree needed here, just keep the backup around until it succeeds.
     try:
-        _install_from_url(name, url, source_type)
+        _marketplace_install(name, resolved_version)
     except Exception as exc:
         if backup_dir is not None and backup_dir.exists():
             shutil.rmtree(plugin_path, ignore_errors=True)
@@ -112,22 +101,20 @@ def register(app: Typer) -> None:
             console.print('[yellow]No installed plugins found.[/yellow]')
             return
 
-        client = _marketplace_client()
-
-        async def _fetch_all() -> list[tuple[str, str | None, str | None]]:
+        def _fetch_all() -> list[tuple[str, str | None, str | None]]:
             results = []
             for pname in names:
                 current = _installed_version(pname)
                 try:
-                    data = await client.get_plugin(pname)
-                    latest = data.get('version', '?') if data else None
+                    data = _get(f'{_LIST_PATH}/{pname}')
+                    latest = data.get('latest_version') if data else None
                 except Exception:
                     latest = None
                 results.append((pname, current, latest))
             return results
 
         with console.status('Checking marketplace for updates...'):
-            results = asyncio.run(_fetch_all())
+            results = _fetch_all()
 
         table = Table(title='Plugin Update Status')
         table.add_column('Plugin', style='cyan')
@@ -148,7 +135,7 @@ def register(app: Typer) -> None:
 
         console.print(table)
         if update_count:
-            console.print(f'\n[yellow]{update_count} update(s) available.[/yellow] Run [cyan]xcli plugin update --all[/cyan] to apply.')
+            console.print(f'\n[yellow]{update_count} update(s) available.[/yellow] Run [cyan]xcli plugin update apply --all[/cyan] to apply.')
         else:
             console.print('\n[green]All plugins are up to date.[/green]')
 

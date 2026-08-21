@@ -10,6 +10,7 @@ from typer import Typer
 from xcli._run import ns, run
 
 _console = Console()
+from xcli._login import login as _login
 from xcli.init.manager import _DB_URLS, create_project
 from xcli.init.upgrade import run_upgrade as _run_upgrade
 from xcli.config.cli import app as config_app
@@ -17,7 +18,9 @@ from xcli.deploy.cli import app as deploy_app
 from xcli.manager.cli import app as manager_app
 from xcli.migrations.cli import app as migrations_app
 from xcli.plugin.cli import app as plugin_app
+from xcli.plugin.install_commands import install as _plugin_install
 from xcli.sandbox.cli import app as sandbox_app
+from xcli.service.cli import app as service_app
 from xcli.worker.cli import app as worker_app
 
 _CTX = {"help_option_names": ["-h", "--help"]}
@@ -75,6 +78,14 @@ def upgrade() -> None:
     _run_upgrade()
 
 
+# ── login ─────────────────────────────────────────────────────
+
+@app.command('login')
+def login_cmd() -> None:
+    """Authorize this machine with the marketplace (opens a browser, device-code flow)."""
+    _login()
+
+
 # ── health ────────────────────────────────────────────────────
 
 @app.command()
@@ -115,7 +126,8 @@ def health() -> None:
 
 @app.command()
 def services() -> None:
-    """Show status of all xcore services."""
+    """Show status of all xcore services (LOCAL runtime — for the marketplace
+    catalog of published service extensions, see `xcli service install`)."""
     from xcli._xcore import _require_xcore
     _require_xcore()
 
@@ -147,11 +159,19 @@ def services() -> None:
     _console.print(table)
 
 
+# ── install (shortcut for `xcli plugin install`) ────────────────
+
+# Same function object as `xcli plugin install` (see xcli/plugin/
+# install_commands.py) — registered a second time here via Typer's
+# imperative form, zero duplicated logic.
+app.command('install', help='Shortcut for `xcli plugin install`.')(_plugin_install)
+
 # ── sub-apps ──────────────────────────────────────────────────
 
 app.add_typer(config_app,  name="config")
 app.add_typer(deploy_app,  name="deploy")
 app.add_typer(plugin_app,  name="plugin")
+app.add_typer(service_app, name="service")
 app.add_typer(sandbox_app, name="sandbox")
 app.add_typer(worker_app,  name="worker")
 app.add_typer(manager_app, name="manager")

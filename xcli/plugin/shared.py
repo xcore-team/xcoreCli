@@ -11,18 +11,28 @@ from xcli.config.runtime import load_raw_config, plugins_directory
 console = Console()
 name_re = re.compile(r'^[a-z][a-z0-9_]*$')
 
-_DEFAULT_MARKETPLACE_API = 'https://api.xcorehub.dev'
+_DEFAULT_MARKETPLACE_API = 'https://marketplace.xcorehub.dev'
 
 
 def marketplace_api_base() -> str:
-    """Return the marketplace API base URL from integration.yaml, with fallback."""
+    """Return the marketplace API base URL from integration.yaml, with fallback.
+
+    `integration.yaml`'s `marketplace.url` is conventionally a bare domain
+    (`marketplace.xcorehub.dev`, no scheme — see the backend's own
+    integration.yaml) since it's also used to build the CORS allow-list.
+    Used directly as an HTTP base URL that would produce a scheme-less,
+    unusable URL for httpx — always ensure a scheme here rather than assume
+    every caller of this config value remembers to add one.
+    """
     try:
         cfg = load_raw_config(required=False)
         marketplace = cfg.get('marketplace', {})
-        url = marketplace.get('api_url') or marketplace.get('url') or _DEFAULT_MARKETPLACE_API
-        return str(url).rstrip('/')
+        url = str(marketplace.get('api_url') or marketplace.get('url') or _DEFAULT_MARKETPLACE_API).rstrip('/')
     except Exception:
-        return _DEFAULT_MARKETPLACE_API
+        url = _DEFAULT_MARKETPLACE_API
+    if not url.startswith(('http://', 'https://')):
+        url = f'https://{url}'
+    return url
 
 
 def marketplace_install_url(name: str, version: str) -> str:

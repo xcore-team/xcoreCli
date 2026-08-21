@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import inspect
+import os
 import shutil
 import subprocess
 import sys
@@ -92,17 +93,75 @@ def plugins_root() -> Path:
     return root.resolve()
 
 
+def _load_project_dotenv(cfg: dict) -> None:
+    """Mirrors xcore.configurations.loader.ConfigLoader._load_dotenv — reads
+    the SAME `app.dotenv` key the running app itself uses to pick its .env
+    file (e.g. `conf/.env`, not necessarily the project-root `.env` that
+    `xcli init` scaffolds by default), so a hand-built or non-default-laid-out
+    project resolves the same values the app would at runtime. Without this,
+    `${DATABASE_URL}`-style placeholders in integration.yaml stayed literal
+    strings — a valid YAML value, but useless to SQLAlchemy/alembic."""
+    dotenv_file = cfg.get("app", {}).get("dotenv")
+    if not dotenv_file:
+        return
+    path = Path(dotenv_file)
+    if not path.is_absolute():
+        path = project_root() / path
+    if not path.exists():
+        return
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(dotenv_path=path, override=False)
+    except ImportError:
+        console.print(
+            f"[yellow]⚠[/yellow] python-dotenv not installed — [dim]{path}[/dim] not loaded, "
+            "${VAR} placeholders in integration.yaml may stay unresolved."
+        )
+
+
 def get_database_url() -> str:
     cfg = load_config()
+    _load_project_dotenv(cfg)
+
     databases = cfg.get("services", {}).get("databases", {})
-    default = databases.get("default", {})
-    url = default.get("url")
-    if not url:
-        console.print(
-            "[red]No database URL in services.databases.default.url (integration.yaml)[/red]"
-        )
+    if not databases:
+        console.print("[red]No services.databases.* found in integration.yaml[/red]")
         raise SystemExit(1)
-    return str(url)
+
+    # `default` is the key `xcli init` scaffolds — but a hand-built project
+    # (or one predating xcli init) may name its only database something else
+    # entirely (e.g. `db`). Unambiguous in that single-entry case; only an
+    # actual error when there's more than one and none is named `default`.
+    entry = databases.get("default")
+    if entry is None:
+        if len(databases) == 1:
+            entry = next(iter(databases.values()))
+        else:
+            keys = ", ".join(databases.keys())
+            console.print(
+                f"[red]No services.databases.default entry, and multiple databases "
+                f"configured ({keys}) — ambiguous which one to use for migrations.[/red]"
+            )
+            raise SystemExit(1)
+
+    url = entry.get("url")
+    if not url:
+        console.print("[red]No 'url' on the resolved database entry in integration.yaml[/red]")
+        raise SystemExit(1)
+
+    expanded = os.path.expandvars(str(url))
+    if "$" in expanded:
+        # expandvars() leaves $VAR/${VAR} untouched when the env var isn't
+        # set — surface that clearly instead of handing alembic a literal
+        # "${DATABASE_URL}" string and letting it fail with a confusing
+        # SQLAlchemy dialect error two layers down.
+        dotenv_hint = cfg.get("app", {}).get("dotenv")
+        where = f"app.dotenv ({dotenv_hint})" if dotenv_hint else "that the env var is set"
+        console.print(
+            f"[yellow]⚠[/yellow] Database URL still contains an unresolved variable: "
+            f"[dim]{expanded}[/dim] — check {where}."
+        )
+    return expanded
 
 
 def get_scan_paths() -> list[Path]:
@@ -151,6 +210,63 @@ def create_alembic_config(directory: str = "alembic") -> Config:
     cfg.set_main_option("sqlalchemy.url", get_database_url())
     cfg.config_file_name = str(root / "alembic.ini")
     return cfg
+
+
+def run_alembic_command(directory: str, action) -> None:
+    """Runs `action(cfg)` against the resolved alembic Config for `directory`
+    — transparently bridging to an async engine first when the project's
+    database URL uses an async driver (e.g. `sqlite+aiosqlite`,
+    `postgresql+asyncpg`, the norm for an xcore project — see CLAUDE.md
+    "Async everywhere").
+
+    Every xcore-generated migrations/env.py (see app/marketplace/migrations/
+    env.py and its siblings) already supports this: its run_migrations_online()
+    checks `context.config.attributes.get("connection")` first and only falls
+    back to a plain `engine_from_config(...).connect()` when none was
+    supplied — that fallback synchronously drives whatever DBAPI the URL
+    names, which fails immediately on an async one ("MissingGreenlet:
+    greenlet_spawn has not been called"). Supplying the connection ourselves,
+    exactly like xcore.services.database.migrations.MigrationRunner already
+    does for plugins loaded by the framework itself, is what makes both paths
+    actually work — this was previously sync-only and broke on any real
+    xcore project's database."""
+    from sqlalchemy.engine import make_url
+
+    url = get_database_url()
+    try:
+        is_async = make_url(url).get_dialect().is_async
+    except Exception:
+        is_async = False
+
+    if not is_async:
+        action(create_alembic_config(directory))
+        return
+
+    try:
+        from sqlalchemy.ext.asyncio import create_async_engine
+    except ImportError:
+        console.print(
+            "[red]Async database URL but SQLAlchemy's async extras aren't installed.[/red]"
+        )
+        raise SystemExit(1)
+
+    import asyncio
+
+    async def _run() -> None:
+        engine = create_async_engine(url)
+        try:
+            async with engine.begin() as conn:
+
+                def _do(sync_conn):
+                    cfg = create_alembic_config(directory)
+                    cfg.attributes["connection"] = sync_conn
+                    action(cfg)
+
+                await conn.run_sync(_do)
+        finally:
+            await engine.dispose()
+
+    asyncio.run(_run())
 
 
 # ── Model discovery ────────────────────────────────────────────
