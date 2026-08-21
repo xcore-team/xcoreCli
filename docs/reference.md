@@ -44,11 +44,12 @@ A comprehensive list of all commands available in `xcorecli`.
 - `local list`: List all plugins with link type.
 
 ### `plugin marketplace`  Discovery
-- `marketplace browse`: List all available plugins.
-- `marketplace search`: Search by keyword.
-- `marketplace info`: Pre-install details.
-- `marketplace trending`: Show popular plugins.
-- `marketplace rate`: Rate 15 stars.
+- `marketplace browse`: List published plugins (`--sort newest|downloads|rating`).
+- `marketplace search`: Search by name or description.
+- `marketplace info`: Pre-install details, including published versions.
+
+No `rate` command — rating requires a full user session (JWT), not an API
+key; rate plugins from the XCoreHub dashboard.
 
 ### `plugin update`  Maintenance
 - `update check`: Check for new versions.

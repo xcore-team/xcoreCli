@@ -6,6 +6,13 @@ Plugins can be installed from the official **xcore Marketplace** or from externa
 
 The easiest way to add features. `xcorecli` handles downloads and HMAC signature verification.
 
+!!! warning "Two credentials required"
+    Marketplace installs need **both** an API key and a signing key
+    configured first — see [Authentication](../getting-started/auth.md).
+    Missing either one fails fast with a clear message telling you which
+    one and how to set it; nothing is extracted until the signature checks
+    out.
+
 ```bash title="Marketplace Install"
 xcli plugin install name-of-plugin
 ```

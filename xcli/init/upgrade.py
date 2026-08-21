@@ -52,6 +52,13 @@ _DEFAULTS: dict = {
         "interval": 10,
         "entry_point": "src/main.py",
     },
+    # Où `xcli service install` extrait les extensions de service du
+    # marketplace — sa propre clé, distincte de "services:" ci-dessous qui
+    # configure le ServiceContainer interne d'xcore (bases de données, cache,
+    # celery). Les réutiliser aurait fait collisionner deux sens différents.
+    "marketplace_services": {
+        "directory": "./services",
+    },
     "services": {
         "databases": {
             "default": {
@@ -104,7 +111,7 @@ _DEFAULTS: dict = {
         },
     },
     "marketplace": {
-        "url": "https://marketplace.xcore.dev",
+        "url": "https://marketplace.xcorehub.dev",
         "api_key": "",
         "timeout": 10,
         "cache_ttl": 300,

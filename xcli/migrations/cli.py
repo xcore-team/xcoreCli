@@ -23,6 +23,7 @@ from xcli.migrations.runtime import (
     project_root,
     render_discovery_summary,
     restore_database,
+    run_alembic_command,
 )
 
 _CTX = {"help_option_names": ["-h", "--help"]}
@@ -303,7 +304,7 @@ def revision(
     with console.status("Scanning models..."):
         discovery = discover_models()
     console.print(f"[dim]Discovery:[/dim] {render_discovery_summary(discovery)}")
-    command.revision(create_alembic_config(directory), message=message, autogenerate=autogenerate)
+    run_alembic_command(directory, lambda cfg: command.revision(cfg, message=message, autogenerate=autogenerate))
 
 
 @app.command("upgrade")
@@ -316,7 +317,7 @@ def upgrade(
     _ensure_initialized(directory)
     if backup:
         _do_backup("pre-upgrade")
-    command.upgrade(create_alembic_config(directory), revision)
+    run_alembic_command(directory, lambda cfg: command.upgrade(cfg, revision))
 
 
 @app.command("downgrade")
@@ -329,7 +330,7 @@ def downgrade(
     _ensure_initialized(directory)
     if backup:
         _do_backup("pre-downgrade")
-    command.downgrade(create_alembic_config(directory), revision)
+    run_alembic_command(directory, lambda cfg: command.downgrade(cfg, revision))
 
 
 @app.command("current")
@@ -339,7 +340,7 @@ def current(
 ) -> None:
     """Show the current database revision."""
     _ensure_initialized(directory)
-    command.current(create_alembic_config(directory), verbose=verbose)
+    run_alembic_command(directory, lambda cfg: command.current(cfg, verbose=verbose))
 
 
 @app.command("history")
@@ -369,7 +370,7 @@ def stamp(
 ) -> None:
     """Stamp the database at a revision without running migrations."""
     _ensure_initialized(directory)
-    command.stamp(create_alembic_config(directory), revision)
+    run_alembic_command(directory, lambda cfg: command.stamp(cfg, revision))
 
 
 # ── Backup / Restore ───────────────────────────────────────────

@@ -1,23 +1,38 @@
 # Authentication
 
-To interact with the **xcore marketplace** and perform secure operations, you need to configure your credentials.
+To interact with the **xcore marketplace** and install plugins, you need
+two separate credentials — they protect different things and neither
+substitutes for the other:
+
+| Credential | What it's for | Where to get it |
+|------------|----------------|------------------|
+| **API key** (`xdk_...`) | Authorizes the download itself (`X-API-Key` header on `GET /plugins/{slug}/install`) — tied to one project (`kind=plugin`, matching the target plugin's slug) | XCoreHub → Déploiements → Projets & clés |
+| **Signing key** | An HMAC-SHA256 secret used to verify the `X-Signature` header on the downloaded ZIP — installation is refused if it doesn't match | XCoreHub → Déploiements → Clé de signature |
+
+`browse`/`search`/`info` (read-only discovery) need **neither** — the
+marketplace listing is public.
 
 ## Configuration Commands
 
 `xcorecli` provides a `config` command group to manage your local settings.
 
-### Set Authentication Token
-
-Use the `set` command to store your marketplace API key:
+### Store your credentials
 
 ```bash title="Configuration"
-xcli config set marketplace.api_key "your-secure-token"
+xcli config set api-key xdk_...
+xcli config set signing-key <your-signing-secret>
 ```
 
-!!! warning "Security First"
-    Never share your API keys or commit them to version control. `xcorecli` stores these credentials securely in your local environment.
+Both are required before `xcli plugin install <name>` will succeed —
+`install` checks for each explicitly and tells you exactly which one is
+missing.
 
-### View Current Configuration
+!!! warning "Security First"
+    Never share your API key or signing key, or commit them to version
+    control. They're stored in `~/.xcli/config.json` (mode `0600`), never in
+    your project's `integration.yaml`.
+
+### View current configuration
 
 To check your current configuration (with sensitive data masked):
 
@@ -25,19 +40,25 @@ To check your current configuration (with sensitive data masked):
 xcli config show
 ```
 
-## Credential Storage
+## Credential storage
 
-Credentials and sensitive settings are managed by the `xcli/_credentials.py` module, which ensures that:
-- API keys are handled securely.
-- Tokens are used for marketplace interactions (`marketplace.xcorehub.dev`).
+Managed by `xcli/_credentials.py` — a flat `~/.xcli/config.json`, keyed
+`api-key` / `signing-key`. Only these two keys are valid; anything else
+passed to `xcli config set` is rejected.
 
-!!! info "Marketplace Integration"
-    By default, `xcorecli` connects to `https://marketplace.xcorehub.dev`. You can override this URL in your `integration.yaml` or via the `config` command.
+!!! info "Marketplace URL"
+    By default, `xcorecli` connects to `https://marketplace.xcorehub.dev`.
+    Override it via `marketplace.url` in the project's `integration.yaml`
+    (the same value the project's own backend uses) — always include the
+    `https://` scheme, a bare domain will fail to resolve as a URL.
 
-## Environment Variables
+## Environment variables
 
-Alternatively, you can use environment variables for CI/CD environments:
+For CI/CD environments, both credentials can be supplied via environment
+variables instead of `xcli config set` — these take priority over
+`~/.xcli/config.json` when present:
 
 ```bash title=".env"
-XCORE_MARKETPLACE_API_KEY=your-token
+XCLI_API_KEY=xdk_...
+XCLI_SIGNING_KEY=your-signing-secret
 ```

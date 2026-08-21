@@ -9,7 +9,6 @@ import yaml
 from typer import Typer
 
 from xcli._credentials import get_api_key, get_signing_key
-from xcli._run import run
 
 from .shared import console, marketplace_install_url, plugins_dir
 
@@ -27,16 +26,29 @@ def _verify_signature(zip_bytes: bytes, x_signature: str, signing_key: str) -> b
     return _hmac.compare_digest(expected, received_hex)
 
 
+def _server_detail(resp: httpx.Response) -> str | None:
+    """Extracts FastAPI's `{"detail": "..."}` body, if present — the server
+    already returns a specific, actionable message for 400s (missing signing
+    key, un-tagged version, invalid GitHub token, ...); showing a single
+    hardcoded guess for every 400 regardless of cause was misleading."""
+    try:
+        detail = resp.json().get('detail')
+        return str(detail) if detail else None
+    except Exception:
+        return None
+
+
 def _handle_http_error(resp: httpx.Response, name: str) -> None:
     if resp.status_code == 200:
         return
+    detail = _server_detail(resp)
     messages = {
         401: '[red]Invalid or revoked API key.[/red] Run: [cyan]xcli config set api-key <key>[/cyan]',
-        400: '[red]Signing key not configured on marketplace.[/red] Go to https://app.xcorehub.dev → Settings → Developer',
+        400: f'[red]{detail or "Bad request."}[/red]',
         404: f"[red]Plugin '[cyan]{name}[/cyan]' not found or version not published.[/red]",
         503: '[red]Marketplace unavailable.[/red] Try again in a few moments.',
     }
-    console.print(messages.get(resp.status_code, f'[red]HTTP {resp.status_code}:[/red] {resp.text[:200]}'))
+    console.print(messages.get(resp.status_code, f'[red]HTTP {resp.status_code}:[/red] {detail or resp.text[:200]}'))
     raise typer.Exit(1)
 
 
@@ -85,9 +97,33 @@ def _marketplace_install(name: str, version: str) -> None:
     if dest.exists():
         import shutil
         shutil.rmtree(dest)
+    dest.mkdir(parents=True, exist_ok=True)
 
+    # Plugins published from a GitHub tag are re-downloaded server-side as a
+    # GitHub codeload archive, which always wraps its contents in a single
+    # top-level `{owner}-{repo}-{sha}/` folder — `extractall(plugins_root)`
+    # used to dump that wrapper folder as-is, so the plugin ended up at
+    # plugins_root/{owner}-{repo}-{sha}/ instead of the plugins_root/{name}
+    # this function's own success message claimed, breaking `info`/`health`/
+    # `remove` (which look up plugins_root/{name}) and leaking one stale
+    # wrapper folder per version on every reinstall. Strip it exactly like
+    # _install_from_url already does below, and extract into dest directly.
+    dest_resolved = dest.resolve()
     with zipfile.ZipFile(io.BytesIO(zip_bytes)) as archive:
-        archive.extractall(plugins_root)
+        members = archive.namelist()
+        prefix = members[0].split('/')[0] + '/' if members and '/' in members[0] else ''
+        for member in members:
+            stripped = member[len(prefix):] if prefix and member.startswith(prefix) else member
+            if not stripped:
+                continue
+            target = (dest_resolved / stripped).resolve()
+            if not target.is_relative_to(dest_resolved):
+                continue
+            if member.endswith('/'):
+                target.mkdir(parents=True, exist_ok=True)
+            else:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(archive.read(member))
 
     console.print(f'[green]✓[/green] [cyan]{x_plugin}[/cyan] installed in [dim]{dest}[/dim]')
 
@@ -141,75 +177,80 @@ def _install_from_url(name: str, url: str, source_type: str) -> None:
     console.print(f'[green]✓[/green] [cyan]{name}[/cyan] installed in [dim]{dest}[/dim]')
 
 
+# Module-level (not a closure inside register()) so the exact same function
+# object can be registered a second time as the top-level `xcli install`
+# shortcut in xcli/main.py — one implementation, zero duplicated logic.
+def install(
+    plugin_spec: str = typer.Argument(..., help='Plugin to install: name, name@latest, or name@1.2.3'),
+    source: str = typer.Option('marketplace', '--source', '-s', help='marketplace | git | zip'),
+    url: Optional[str] = typer.Option(None, '--url', '-u', help='URL for git/zip source'),
+    force: bool = typer.Option(False, '--force', '-f', help='Overwrite existing installation'),
+    no_deps: bool = typer.Option(False, '--no-deps', help='Skip dependency installation'),
+) -> None:
+    """Install a plugin from marketplace, a Git URL, or a local zip.
+
+    Examples:
+        xcli plugin install my-plugin
+        xcli plugin install my-plugin@1.2.3
+        xcli plugin install my-plugin --source git --url https://github.com/user/plugin.git
+    """
+    if '@' in plugin_spec:
+        name, version = plugin_spec.split('@', 1)
+    else:
+        name, version = plugin_spec, 'latest'
+
+    dest = plugins_dir() / name
+    if dest.exists() and not force:
+        console.print(f'[yellow]{name}[/yellow] is already installed. Use [cyan]--force[/cyan] to overwrite.')
+        raise typer.Exit(1)
+
+    if source == 'marketplace':
+        _marketplace_install(name, version)
+        return
+    if not url:
+        console.print('[red]--url required for git/zip source.[/red]')
+        raise typer.Exit(1)
+    _install_from_url(name, url, source)
+
+
 def register(app: Typer) -> None:
 
-    @app.command('install')
-    def install(
-        plugin_spec: str = typer.Argument(..., help='Plugin to install: name, name@latest, or name@1.2.3'),
-        source: str = typer.Option('marketplace', '--source', '-s', help='marketplace | git | zip'),
-        url: Optional[str] = typer.Option(None, '--url', '-u', help='URL for git/zip source'),
-        force: bool = typer.Option(False, '--force', '-f', help='Overwrite existing installation'),
-        no_deps: bool = typer.Option(False, '--no-deps', help='Skip dependency installation'),
-    ) -> None:
-        """Install a plugin from marketplace, a Git URL, or a local zip.
-
-        Examples:
-            xcli plugin install my-plugin
-            xcli plugin install my-plugin@1.2.3
-            xcli plugin install my-plugin --source git --url https://github.com/user/plugin.git
-        """
-        if '@' in plugin_spec:
-            name, version = plugin_spec.split('@', 1)
-        else:
-            name, version = plugin_spec, 'latest'
-
-        dest = plugins_dir() / name
-        if dest.exists() and not force:
-            console.print(f'[yellow]{name}[/yellow] is already installed. Use [cyan]--force[/cyan] to overwrite.')
-            raise typer.Exit(1)
-
-        if source == 'marketplace':
-            _marketplace_install(name, version)
-            return
-        if not url:
-            console.print('[red]--url required for git/zip source.[/red]')
-            raise typer.Exit(1)
-        _install_from_url(name, url, source)
+    app.command('install')(install)
 
     @app.command('versions')
     def versions(name: str) -> None:
-        """List available versions of a marketplace plugin."""
-        from xcli._xcore import _require_xcore
-        _require_xcore()
+        """List available versions of a marketplace plugin.
 
-        async def _run() -> None:
-            from rich.table import Table
+        The backend has no dedicated /versions endpoint — versions come
+        embedded in GET /plugins/{slug} (see .marketplace_commands._get),
+        so this reuses that same fetch rather than a separate client.
+        """
+        from rich.table import Table
 
-            from xcore.configurations.loader import ConfigLoader
-            from xcore.marketplace import MarketplaceClient
+        from .marketplace_commands import _get, _LIST_PATH
 
-            client = MarketplaceClient(ConfigLoader.load(None))
-            with console.status(f'Fetching versions for [cyan]{name}[/cyan]...'):
-                data = await client.get_versions(name)
+        with console.status(f'Fetching versions for [cyan]{name}[/cyan]...'):
+            data = _get(f'{_LIST_PATH}/{name}')
 
-            if not data:
-                console.print(f"[yellow]No versions found for '[cyan]{name}[/cyan]'.[/yellow]")
-                return
+        items = (data or {}).get('versions') or []
+        if not items:
+            console.print(f"[yellow]No versions found for '[cyan]{name}[/cyan]'.[/yellow]")
+            return
 
-            table = Table(title=f'Versions — {name}')
-            table.add_column('Version', style='cyan')
-            table.add_column('Released', style='dim')
-            table.add_column('Source', style='green')
-            for item in data:
-                table.add_row(
-                    item.get('version', '?'),
-                    item.get('released_at', '—'),
-                    item.get('source_type', 'zip'),
-                )
-            console.print(table)
-            console.print(f'\n[dim]Install: xcli plugin install {name}@<version>[/dim]')
-
-        run(_run())
+        table = Table(title=f'Versions — {name}')
+        table.add_column('Version', style='cyan')
+        table.add_column('Status', style='green')
+        table.add_column('Stable', justify='center')
+        table.add_column('Created', style='dim')
+        for item in items:
+            table.add_row(
+                item.get('version', '?'),
+                item.get('publish_status', '?'),
+                '✅' if item.get('is_stable') else '',
+                str(item.get('created_at', '—'))[:10],
+            )
+        console.print(table)
+        console.print(f'\n[dim]Install: xcli plugin install {name}@<version>[/dim]')
 
     @app.command('remove')
     def remove(
