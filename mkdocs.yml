@@ -58,6 +58,7 @@ nav:
   - Global Commands:
     - init & upgrade: commands/init.md
     - health & services: commands/health.md
+    - login & install: commands/login.md
   - Config: config/index.md
   - Plugin:
     - Overview: plugin/index.md
@@ -67,6 +68,7 @@ nav:
     - Marketplace: plugin/marketplace.md
     - Security: plugin/security.md
     - Updates: plugin/update.md
+  - Service: service/index.md
   - Sandbox: sandbox/index.md
   - Worker:
     - Overview: worker/index.md

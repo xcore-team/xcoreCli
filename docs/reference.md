@@ -6,8 +6,11 @@ A comprehensive list of all commands available in `xcorecli`.
 
 - `xcli init`: Initialize a new xcore project.
 - `xcli upgrade`: Migrate `integration.yaml` to the latest schema.
+- `xcli login`: Authorize this machine with the marketplace (device-code flow).
+- `xcli install`: Shortcut for `xcli plugin install`.
 - `xcli health`: Global health check of all configured services.
-- `xcli services`: Show status and details of all system services.
+- `xcli services`: Show status and details of all system services (local
+  runtime — not the marketplace catalog, see `xcli service` below).
 
 ## `manager`  Administration
 
@@ -60,6 +63,22 @@ key; rate plugins from the XCoreHub dashboard.
 - `runtime unload`: Deactivate a plugin.
 - `runtime reload`: Restart a plugin.
 - `runtime status`: Show active plugins.
+
+## `service`  Marketplace Extensions
+
+Mirror of `plugin` for the separate `xservices` catalog — not to be
+confused with `xcli services`/`xcli manager services` (local runtime).
+
+- `service info`: Detailed local extension report.
+- `service health`: Health check of all installed extensions.
+- `service remove`: Uninstall an extension.
+- `service install`: Install from marketplace.
+- `service versions`: List marketplace versions.
+
+### `service marketplace`  Discovery
+- `marketplace browse`: List published extensions (`--sort newest|installs|rating`).
+- `marketplace search`: Search by name or description.
+- `marketplace info`: Pre-install details, including published versions.
 
 ## `worker`  Background Tasks
 

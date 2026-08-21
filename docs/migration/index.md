@@ -2,6 +2,13 @@
 
 `xcorecli` provides a streamlined wrapper around **Alembic** to manage your database schema migrations, with added safety features like automated backups.
 
+!!! info "Async database support"
+    `upgrade`/`downgrade`/`revision`/`current`/`stamp` all transparently
+    bridge to an async engine first when your `integration.yaml` database
+    URL uses an async driver (`sqlite+aiosqlite`, `postgresql+asyncpg`,
+    ...) — the normal case for an xcore project. No configuration needed;
+    it's detected from the URL itself.
+
 ## Getting Started
 
 Migrations are managed via the `migration` command group.

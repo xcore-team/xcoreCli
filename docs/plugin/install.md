@@ -17,6 +17,10 @@ The easiest way to add features. `xcorecli` handles downloads and HMAC signature
 xcli plugin install name-of-plugin
 ```
 
+!!! tip "Shortcut"
+    `xcli install name-of-plugin` works too — a top-level alias for
+    `xcli plugin install`, same command underneath.
+
 ### Installing a Specific Version
 
 ```bash
