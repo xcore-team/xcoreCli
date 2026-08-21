@@ -67,8 +67,6 @@ nav:
     - Marketplace: plugin/marketplace.md
     - Security: plugin/security.md
     - Updates: plugin/update.md
-  - Deploy:
-    - Overview: deploy/index.md
   - Sandbox: sandbox/index.md
   - Worker:
     - Overview: worker/index.md

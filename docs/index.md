@@ -9,7 +9,6 @@
 
 - **Project Initialization**: Seamlessly scaffold new projects and manage `integration.yaml`.
 - **Plugin Lifecycle**: Full control over installing, signing, and updating plugins.
-- **Production Deploy**: Deploy plugins to remote servers via SSH with pre/post hooks.
 - **Real-time Monitoring**: Integrated dashboard for service health and resource usage.
 - **Worker Orchestration**: Manage Celery/XWorker processes with ease.
 - **Security & Sandboxing**: Resource isolation and AST-based whitelisting for plugins.
@@ -30,5 +29,11 @@ make install
 
 - [Installation Guide](getting-started/install.md)
 - [Authentication Setup](getting-started/auth.md)
-- [Deploy to Production](deploy/index.md)
 - [Core Commands Reference](reference.md)
+
+!!! info "Production deployment"
+    Deploying plugin bundles to remote servers is no longer part of
+    `xcorecli` — it's fully handled by the standalone
+    [`xcore-agent`](https://github.com/traoreera/xcore-agent) deployment
+    agent (Hub artifact fetch, signature verification, install/rollback,
+    systemd/Docker/Kubernetes supervisors, CI/CD watch loop).
