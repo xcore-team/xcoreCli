@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "xcorecli"
-version = "2.0.0"
+version = "2.1.0"
 description = "CLI for xcore — configuration, plugins, monitoring"
 readme = "README.md"
 requires-python = ">=3.12"
