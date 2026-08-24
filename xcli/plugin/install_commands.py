@@ -10,7 +10,7 @@ from typer import Typer
 
 from xcli._credentials import get_api_key, get_signing_key
 
-from .shared import console, marketplace_install_url, plugins_dir
+from .shared import console, marketplace_install_url, parse_x_repo, plugins_dir, record_install
 
 
 def _verify_signature(zip_bytes: bytes, x_signature: str, signing_key: str) -> bool:
@@ -127,6 +127,20 @@ def _marketplace_install(name: str, version: str) -> None:
 
     console.print(f'[green]✓[/green] [cyan]{x_plugin}[/cyan] installed in [dim]{dest}[/dim]')
 
+    resolved_version = x_plugin.rsplit('@', 1)[-1] if '@' in x_plugin else version
+    repository, ref = parse_x_repo(resp.headers.get('X-Repo'))
+    record_install(
+        name,
+        {
+            'source': 'marketplace',
+            'slug': name,
+            'kind': 'plugin',
+            'version': resolved_version,
+            'repository': repository,
+            'ref': ref,
+        },
+    )
+
 
 def _install_from_url(name: str, url: str, source_type: str) -> None:
     import io
@@ -139,7 +153,9 @@ def _install_from_url(name: str, url: str, source_type: str) -> None:
         shutil.rmtree(dest)
     dest.mkdir(parents=True, exist_ok=True)
 
-    if source_type == 'git' or url.endswith('.git'):
+    resolved_ref: Optional[str] = None
+    used_git = source_type == 'git' or url.endswith('.git')
+    if used_git:
         import subprocess
 
         console.print(f'  Cloning [dim]{url}[/dim]...')
@@ -147,6 +163,14 @@ def _install_from_url(name: str, url: str, source_type: str) -> None:
         if result.returncode != 0:
             console.print(f'[red]git clone failed:[/red] {result.stderr.decode().strip()}')
             raise typer.Exit(1)
+        # --depth=1 leaves HEAD at whatever the clone resolved (default
+        # branch tip, since no ref was requested) — pin the registry entry
+        # to that exact commit rather than a mutable branch name, so a
+        # later `xcore-agent build` re-resolving from it gets the same code.
+        head = subprocess.run(
+            ['git', '-C', str(dest), 'rev-parse', 'HEAD'], capture_output=True, text=True
+        )
+        resolved_ref = head.stdout.strip() if head.returncode == 0 else None
     else:
         import urllib.request
 
@@ -175,6 +199,18 @@ def _install_from_url(name: str, url: str, source_type: str) -> None:
                     target.write_bytes(archive.read(member))
 
     console.print(f'[green]✓[/green] [cyan]{name}[/cyan] installed in [dim]{dest}[/dim]')
+
+    record_install(
+        name,
+        {
+            'source': 'git' if used_git else 'zip',
+            'slug': name,
+            'kind': 'plugin',
+            'version': None,
+            'repository': url if used_git else None,
+            'ref': resolved_ref,
+        },
+    )
 
 
 # Module-level (not a closure inside register()) so the exact same function
