@@ -6,6 +6,8 @@ import httpx
 import typer
 from typer import Typer
 
+from xcli._credentials import get_api_key
+
 from .shared import console, marketplace_api_base
 
 # Contrat réel du backend (app/marketplace/src/routes/plugins.py) — pas le
@@ -89,6 +91,45 @@ def register(app: Typer) -> None:
             console.print(f"[yellow]No results for '[cyan]{query}[/cyan]'.[/yellow]")
             return
         _table(items, f'Search results — {query}')
+
+    @app.command('mine')
+    def mine() -> None:
+        """List YOUR plugins on the marketplace — public and private alike.
+
+        `browse`/`search` above only ever see public plugins: they call
+        GET /plugins unauthenticated, and the server only widens that to a
+        caller's own private plugins for a JWT session — which `xcli` never
+        holds (even after `xcli login`, which saves an API key + signing
+        key via a device-code flow, never a browser session token). This
+        command instead calls GET /plugins/mine with X-API-Key — the same
+        auth `xcli plugin install` already uses successfully to fetch a
+        private plugin you own, now also available for listing them.
+        """
+        api_key = get_api_key()
+        if not api_key:
+            console.print('[red]API key missing.[/red] Run: [cyan]xcli login[/cyan] or [cyan]xcli config set api-key xdk_...[/cyan]')
+            raise typer.Exit(1)
+
+        url = f'{marketplace_api_base()}{_LIST_PATH}/mine'
+        with console.status('Fetching your plugins...'):
+            try:
+                resp = httpx.get(url, headers={'X-API-Key': api_key}, timeout=15, follow_redirects=True)
+                resp.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code == 401:
+                    console.print('[red]Invalid or revoked API key.[/red] Run: [cyan]xcli login[/cyan]')
+                else:
+                    console.print(f'[red]HTTP {exc.response.status_code}:[/red] {exc.response.text[:200]}')
+                raise typer.Exit(1)
+            except httpx.RequestError as exc:
+                console.print(f'[red]Network error:[/red] {exc}')
+                raise typer.Exit(1)
+
+        items = resp.json() or []
+        if not items:
+            console.print('[yellow]No plugins yet.[/yellow] Publish one: [dim]xcli plugin marketplace info <slug>[/dim]')
+            return
+        _table(items, f'Your Plugins ({len(items)})')
 
     @app.command('info')
     def info(slug: str) -> None:
