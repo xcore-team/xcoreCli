@@ -13,7 +13,7 @@ Getting started with `xcorecli` is straightforward. The project uses [Poetry](ht
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/your-repo/xcorecli.git
+git clone https://github.com/xcore-team/xcoreCli.git
 cd xcorecli
 ```
 

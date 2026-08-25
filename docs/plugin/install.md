@@ -32,13 +32,37 @@ To see all available versions for a plugin:
 xcli plugin versions name-of-plugin
 ```
 
-## Installing from Git or URL
+## Installing from Git or a Local Zip
 
-You can install plugins directly from a Git repository or a hosted `.zip` file.
+You can install plugins directly from a Git repository or a `.zip` file
+instead of the marketplace — neither one goes through HMAC verification,
+that's marketplace-only, so run `xcli plugin health` afterward (see below).
 
 ```bash title="Git Install"
 xcli plugin install my-plugin --source git --url https://github.com/user/plugin.git
 ```
+
+```bash title="Zip Install"
+xcli plugin install my-plugin --source zip --url ./path/to/plugin.zip
+```
+
+`--url` is required for both `git` and `zip` — omitting it fails fast
+rather than falling back to the marketplace.
+
+## Reinstalling
+
+```bash
+xcli plugin install name-of-plugin --force     # overwrite an existing install
+```
+
+Without `--force`, installing over an already-installed plugin (same name)
+is refused with a one-line message telling you to add the flag.
+
+!!! bug "`--no-deps` currently has no effect"
+    The flag is accepted (`install --no-deps`) but the installer never
+    reads it — confirmed in `xcli/plugin/install_commands.py`: dependencies
+    install the same way whether or not you pass it. Not documented as
+    working here on purpose; treat it as reserved for now.
 
 ## Management Commands
 

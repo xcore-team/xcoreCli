@@ -17,7 +17,7 @@
 ## Quick Start Overview
 
 ```bash title="Quick Install"
-git clone https://github.com/your-repo/xcorecli.git
+git clone https://github.com/xcore-team/xcoreCli.git
 cd xcorecli
 make install
 ```

@@ -12,11 +12,19 @@ xcli init my-project
 
 ### Database Options
 
-The initialization wizard supports several database backends with pre-configured URL templates:
-- **SQLite**: `sqlite:///./data/xcore.db` (Default)
-- **PostgreSQL**: `postgresql://user:pass@localhost:5432/db`
-- **MySQL**: `mysql+pymysql://user:pass@localhost:3306/db`
-- **MariaDB**: `mysql+pymysql://user:pass@localhost:3306/db`
+The initialization wizard supports several database backends with
+pre-configured URL templates — always the **async** driver variant, never
+a sync one, since `xcore` is async end-to-end:
+
+- **SQLite** (default): `sqlite+aiosqlite:///./xcore.db`
+- **PostgreSQL**: `postgresql+asyncpg://user:pass@localhost:5432/dbname`
+- **MySQL**: `mysql+aiomysql://user:pass@localhost:3306/dbname`
+- **MariaDB**: `mysql+aiomysql://user:pass@localhost:3306/dbname`
+
+`--db-url` overrides the template entirely if you need a different
+host/user/password — but keep the `+aiosqlite`/`+asyncpg`/`+aiomysql`
+driver suffix; a plain `postgresql://`/`mysql://` URL uses a sync driver
+that doesn't work with this framework's async SQLAlchemy engine.
 
 ### Generated Structure
 
