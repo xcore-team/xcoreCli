@@ -99,5 +99,13 @@ Check which migrations have been applied.
 xcli migration history
 ```
 
+See the database's current revision, or where the migration chain's
+unapplied heads are:
+
+```bash
+xcli migration current   # what revision the DB is actually stamped at
+xcli migration heads     # latest revision(s) defined in the migration scripts
+```
+
 !!! tip "Stamping"
     Use `xcli migration stamp <id>` to mark the database at a specific revision without running the actual migration scripts.

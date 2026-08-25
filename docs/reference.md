@@ -12,6 +12,15 @@ A comprehensive list of all commands available in `xcorecli`.
 - `xcli services`: Show status and details of all system services (local
   runtime — not the marketplace catalog, see `xcli service` below).
 
+## `config`  Credentials
+
+- `config set <api-key|signing-key> <value>`: Store one credential in
+  `~/.xcli/config.json` — the manual alternative to `xcli login` above.
+- `config show`: Print whether each credential is set (masked).
+
+Only these two keys exist — no arbitrary `integration.yaml` settings live
+here, see [Configuration](getting-started/configuration.md) for that file.
+
 ## `manager`  Administration
 
 - `manager start`: Start the FastAPI server (uvicorn).
@@ -50,9 +59,18 @@ A comprehensive list of all commands available in `xcorecli`.
 - `marketplace browse`: List published plugins (`--sort newest|downloads|rating`).
 - `marketplace search`: Search by name or description.
 - `marketplace info`: Pre-install details, including published versions.
+- `marketplace mine`: List *your* plugins — public and private alike (needs
+  an API key; `browse`/`search`/`info` above are public, no credentials).
 
 No `rate` command — rating requires a full user session (JWT), not an API
 key; rate plugins from the XCoreHub dashboard.
+
+### `plugin security`  Signing & validation
+- `security sign`: HMAC-sign a plugin (`plugin.sig`).
+- `security verify`: Verify a plugin's signature.
+- `security validate`: Validate plugin manifest(s); `--check-breaking`
+  diffs IPC actions/events against a saved schema snapshot, `--save`
+  updates that snapshot.
 
 ### `plugin update`  Maintenance
 - `update check`: Check for new versions.
@@ -62,7 +80,21 @@ key; rate plugins from the XCoreHub dashboard.
 - `runtime load`: Activate a plugin.
 - `runtime unload`: Deactivate a plugin.
 - `runtime reload`: Restart a plugin.
+- `runtime reload-all`: Restart every active plugin at once.
 - `runtime status`: Show active plugins.
+- `runtime call`: Invoke a plugin action directly (`--payload '{"k": "v"}'`).
+
+## `sandbox`  Isolated Execution
+
+Run a plugin in isolation and inspect its declared resource/network/
+filesystem policy — none of these require the plugin to already be loaded
+by a running instance.
+
+- `sandbox run`: Launch a plugin sandboxed, keep it running (Ctrl+C to stop).
+- `sandbox call`: Start sandboxed, call one action, print the result, stop.
+- `sandbox limits`: Show resource limits from the manifest.
+- `sandbox network`: Show the declared network policy.
+- `sandbox fs`: Show the declared filesystem policy.
 
 ## `service`  Marketplace Extensions
 
@@ -104,4 +136,7 @@ confused with `xcli services`/`xcli manager services` (local runtime).
 - `migration revision`: Create a new migration.
 - `migration upgrade`: Apply migrations (--backup).
 - `migration downgrade`: Rollback migrations.
+- `migration current`: Show the database's current revision.
+- `migration heads`: Show the migration chain's latest defined revision(s).
+- `migration stamp`: Mark the DB at a revision without running scripts.
 - `migration history`: Show migration list.

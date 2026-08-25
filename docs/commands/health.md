@@ -39,5 +39,7 @@ xcli services
 
 If `health` reports errors:
 1. Check the logs: `make logs`
-2. Validate configuration: `xcli config validate`
+2. Check your marketplace credentials aren't the issue: `xcli config show`
+   (there's no dedicated `integration.yaml` validator — it's checked
+   automatically whenever `xcli manager start` reads it)
 3. Restart services: `make restart`

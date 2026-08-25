@@ -1,49 +1,48 @@
 # CLI Configuration
 
-The `config` command group allows you to manage the behavior of `xcorecli` itself and its interaction with the `xcore` project.
+The `config` command group stores the two credentials `xcorecli` needs to
+talk to the marketplace: an **API key** (`xdk_...`, authorizes downloads)
+and a **signing key** (verifies the HMAC signature of every ZIP before
+extraction). It does **not** manage `integration.yaml` or any other
+project-level setting — see [Getting started → Configuration](../getting-started/configuration.md)
+for that.
 
-## Commands Overview
+!!! tip "Prefer `xcli login`"
+    `xcli login` (device-code flow, opens a browser) fetches and stores
+    **both** credentials in one step, without ever printing them to the
+    terminal. `config set` below is the manual fallback — useful in a
+    non-interactive environment (CI, a container) where opening a browser
+    isn't possible.
+
+## Commands
 
 | Command | Description |
 |---------|-------------|
-| `show`  | Display the current merged configuration. |
-| `get`   | Retrieve a specific configuration value. |
-| `set`   | Update a configuration value. |
-| `validate` | Check `integration.yaml` for schema compliance. |
+| `xcli config set <key> <value>` | Store a credential — `key` must be `api-key` or `signing-key`. |
+| `xcli config show` | Print whether each credential is set (values are masked, never shown in full). |
 
-## Managing Settings
+## Setting credentials manually
 
-### Viewing Configuration
+```bash
+xcli config set api-key xdk_...
+xcli config set signing-key <your-signing-secret>
+```
 
-To see your current setup, including defaults and overrides from `integration.yaml`:
+Both are written to `~/.xcli/config.json` — the same file `xcli login`
+writes to, so mixing the two approaches (login once, then manually rotate
+one key later) is safe.
+
+## Checking status
 
 ```bash
 xcli config show
 ```
 
-### Updating Values
-
-You can modify settings directly from the CLI. These changes are typically applied to your local configuration or the project's `integration.yaml`.
-
-```bash title="Set Value"
-xcli config set app.debug true
+```
+api-key:     set
+signing-key: not set
 ```
 
-!!! note "Layered Configuration"
-    `xcorecli` uses a layered approach:
-    1. Internal Defaults
-    2. `integration.yaml` (Project level)
-    3. Local CLI Config (User level)
-    4. Environment Variables
-
-## Runtime Configuration
-
-Some settings in the `runtime` section of `integration.yaml` can be adjusted without restarting the entire system, such as plugin reload intervals.
-
-```yaml
-plugins:
-  interval: 5 # Check for changes every 5 seconds
-```
-
-!!! info "Dynamic Updates"
-    Use `xcli manager services reload` to apply certain configuration changes on the fly.
+Nothing else is configurable through this command group — there is no
+`get`/`validate` sub-command, and no arbitrary `key.path value` form; `key`
+is restricted to exactly `api-key` or `signing-key`.

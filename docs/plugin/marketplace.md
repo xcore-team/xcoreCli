@@ -1,7 +1,8 @@
 # Plugin Marketplace
 
-Discover plugins available on the marketplace before installing them — all
-three commands here are read-only and public, no credentials required.
+Discover plugins available on the marketplace before installing them.
+`browse`/`search`/`info` below are read-only and public, no credentials
+required; `mine` is the one exception (see below).
 
 ## Browse All
 
@@ -29,6 +30,20 @@ published versions.
 ```bash title="Plugin Info"
 xcli plugin marketplace info name-of-plugin
 ```
+
+## Your Plugins
+
+`browse`/`search` above only ever show **public** plugins — unauthenticated
+requests, by design. To also see your own **private** plugins, use `mine`
+instead, which sends your API key:
+
+```bash title="Your plugins"
+xcli plugin marketplace mine
+```
+
+Needs the same API key as installing does — see
+[Authentication](../getting-started/auth.md). `xcli login`'s personal key
+works here even without a project-scoped key for any specific plugin.
 
 ## What's not here
 

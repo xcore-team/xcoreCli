@@ -67,4 +67,4 @@ observability:
 
 ## Validation
 
-`xcorecli` validates this file upon startup to ensure all required fields are present and correctly typed. Use `xcli config validate` to check your configuration manually.
+`xcorecli` validates this file upon startup to ensure all required fields are present and correctly typed — there is no separate command to check it manually ahead of time; `xcli manager start` (or any command that touches the running project) is itself the validation step. This is unrelated to [`xcli config`](../config/index.md), which only stores your marketplace API/signing keys, not `integration.yaml` settings.
