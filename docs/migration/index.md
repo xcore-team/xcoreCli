@@ -23,6 +23,15 @@ xcli migration init
 
 This creates the `alembic/` directory, configuration files, and scans for initial models.
 
+!!! tip "Custom directory name"
+    Pass `--dir my_migrations` to use a different directory name. The chosen
+    name is persisted to `migration.directory` in `integration.yaml`, so every
+    other `migration` command (`revision`, `upgrade`, `downgrade`, `current`,
+    `history`, `heads`, `stamp`) picks it up automatically — no need to repeat
+    `--dir` on each call. To rename an already-initialized project, use
+    `xcli migration rename <new_name>` instead of moving the folder by hand —
+    it also updates `alembic.ini` and `integration.yaml` for you.
+
 ## Safety & Backups
 
 Before performing dangerous operations, `xcorecli` can automatically backup your database.

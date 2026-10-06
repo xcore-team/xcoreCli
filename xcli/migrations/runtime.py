@@ -202,9 +202,38 @@ def get_backup_dir() -> Path:
     return p.resolve()
 
 
-def create_alembic_config(directory: str = "alembic") -> Config:
+def get_migration_dir() -> str:
+    """Name of the Alembic directory, persisted once by `xcli migration init`
+    (or `rename`) so every other command agrees on it without `--dir` having
+    to be repeated on each invocation."""
+    cfg = load_config()
+    return cfg.get("migration", {}).get("directory", "alembic")
+
+
+def set_migration_dir(name: str) -> None:
+    """Persist `migration.directory` in integration.yaml/json, backing up the
+    previous file first — mirrors the backup-then-rewrite convention used by
+    `xcli init upgrade` (xcli/init/upgrade.py)."""
+    path = require_config_path()
+    cfg = load_config()
+    cfg.setdefault("migration", {})["directory"] = name
+
+    bak = path.with_name(path.name + ".bak")
+    bak.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+
+    if path.suffix.lower() == ".json":
+        import json
+        path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    else:
+        path.write_text(
+            yaml.dump(cfg, default_flow_style=False, allow_unicode=True, sort_keys=False),
+            encoding="utf-8",
+        )
+
+
+def create_alembic_config(directory: str | None = None) -> Config:
     root = project_root()
-    alembic_dir = root / directory
+    alembic_dir = root / (directory or get_migration_dir())
     cfg = Config()
     cfg.set_main_option("script_location", str(alembic_dir))
     cfg.set_main_option("sqlalchemy.url", get_database_url())
@@ -533,8 +562,13 @@ def list_backups(backup_dir: Path | None = None) -> list[Path]:
 
 
 def _iter_python_files(scan_root: Path) -> Iterator[Path]:
+    # `_IGNORED_PARTS` only covers the literal defaults ("alembic", "migrations") —
+    # a project that renamed its migration directory (migration.directory /
+    # `xcli migration rename`) needs that name excluded too, or model discovery
+    # starts importing migration scripts as if they were app modules.
+    ignored = _IGNORED_PARTS | {get_migration_dir()}
     for path in scan_root.rglob("*.py"):
-        if any(part in _IGNORED_PARTS for part in path.parts):
+        if any(part in ignored for part in path.parts):
             continue
         yield path
 

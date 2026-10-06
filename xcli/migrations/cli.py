@@ -17,6 +17,7 @@ from xcli.migrations.runtime import (
     discover_models,
     get_backup_dir,
     get_database_url,
+    get_migration_dir,
     get_scan_paths,
     list_backups,
     parse_db_url,
@@ -24,6 +25,7 @@ from xcli.migrations.runtime import (
     render_discovery_summary,
     restore_database,
     run_alembic_command,
+    set_migration_dir,
 )
 
 _CTX = {"help_option_names": ["-h", "--help"]}
@@ -41,7 +43,7 @@ from pathlib import Path
 import sys
 
 from alembic import context
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import MetaData, engine_from_config, pool
 
 config = context.config
 ROOT = Path(config.config_file_name).resolve().parent if config.config_file_name else Path.cwd()
@@ -55,12 +57,47 @@ if config.config_file_name is not None:
 
 config.set_main_option("sqlalchemy.url", get_database_url())
 discovery = discover_models()
-target_metadata = discovery.target_metadata
+
+
+def _merge_metadata(entries: list[MetaData]) -> MetaData | None:
+    merged = MetaData()
+    seen: set[str] = set()
+    for entry in entries:
+        # `sorted_tables` respecte l'ordre des dépendances (une table est copiée après celles qu'elle référence).
+        for table in entry.sorted_tables:
+            key = table.key
+            if key in seen:
+                continue
+            seen.add(key)
+            table.to_metadata(merged)
+    # `MetaData` n'a pas de `__bool__` : un objet vide reste « vrai », c'est `tables` qu'il faut interroger.
+    return merged if merged.tables else None
+
+
+# Pilotes async de l'application → pilote synchrone équivalent DÉJÀ présent dans l'environnement. `aiosqlite` n'a
+# pas de « pilote » : le dialecte `sqlite` est déjà synchrone, d'où la chaîne vide.
+_ASYNC_TO_SYNC = {
+    "aiosqlite": "",
+    "asyncpg": "psycopg2",
+    "aiomysql": "pymysql",
+    "asyncmy": "pymysql",
+}
+
+
+def _sync_url(url: str) -> str:
+    for async_driver, sync_driver in _ASYNC_TO_SYNC.items():
+        if f"+{async_driver}:" in url:
+            # `sqlite` n'a pas de pilote : on retire le `+` plutôt que de laisser `sqlite+:` (plugin inexistant).
+            return url.replace(f"+{async_driver}:", f"+{sync_driver}:" if sync_driver else ":", 1)
+    return url
+
+
+target_metadata = _merge_metadata(discovery.target_metadata)
 
 
 def run_migrations_offline() -> None:
     context.configure(
-        url=get_database_url(),
+        url=_sync_url(get_database_url()),
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
@@ -73,7 +110,7 @@ def run_migrations_offline() -> None:
 
 def run_migrations_online() -> None:
     configuration = config.get_section(config.config_ini_section, {})
-    configuration["sqlalchemy.url"] = get_database_url()
+    configuration["sqlalchemy.url"] = _sync_url(get_database_url())
     connectable = engine_from_config(
         configuration,
         prefix="sqlalchemy.",
@@ -94,6 +131,7 @@ if context.is_offline_mode():
     run_migrations_offline()
 else:
     run_migrations_online()
+
 """
 
 _SCRIPT_TEMPLATE = '''\
@@ -165,6 +203,9 @@ datefmt = %H:%M:%S
 
 # ── Helpers ────────────────────────────────────────────────────
 
+_DIR_HELP = "Alembic directory (default: migration.directory in integration.yaml, else 'alembic')."
+
+
 def _alembic_dir(directory: str) -> Path:
     return (project_root() / directory).resolve()
 
@@ -199,10 +240,11 @@ def _do_backup(label: str = "") -> None:
 
 @app.command("init")
 def init(
-    directory: str = typer.Option("alembic", "--dir", help="Alembic directory to create."),
+    directory: Optional[str] = typer.Option(None, "--dir", help="Alembic directory to create. " + _DIR_HELP),
     force: bool = typer.Option(False, "--force", help="Overwrite generated files if they already exist."),
 ) -> None:
     """Create an Alembic workspace wired to integration.yaml and all discovered models."""
+    directory = directory or get_migration_dir()
     root = project_root()
     alembic_dir = _alembic_dir(directory)
     versions_dir = alembic_dir / "versions"
@@ -233,6 +275,9 @@ def init(
         _INI_TEMPLATE.format(script_location=directory, database_url=db_url),
         encoding="utf-8",
     )
+
+    if get_migration_dir() != directory:
+        set_migration_dir(directory)
 
     db_info = parse_db_url(db_url)
 
@@ -297,9 +342,10 @@ def revision(
         True, "--autogenerate/--empty",
         help="Generate operations from discovered models.",
     ),
-    directory: str = typer.Option("alembic", "--dir", help="Alembic directory."),
+    directory: Optional[str] = typer.Option(None, "--dir", help=_DIR_HELP),
 ) -> None:
     """Create a new Alembic revision from discovered models."""
+    directory = directory or get_migration_dir()
     _ensure_initialized(directory)
     with console.status("Scanning models..."):
         discovery = discover_models()
@@ -310,10 +356,11 @@ def revision(
 @app.command("upgrade")
 def upgrade(
     revision: str = typer.Argument("head", help="Target revision (head, +1, <id>)."),
-    directory: str = typer.Option("alembic", "--dir", help="Alembic directory."),
+    directory: Optional[str] = typer.Option(None, "--dir", help=_DIR_HELP),
     backup: bool = typer.Option(False, "--backup", "-b", help="Backup database before upgrading."),
 ) -> None:
     """Apply migrations up to the target revision."""
+    directory = directory or get_migration_dir()
     _ensure_initialized(directory)
     if backup:
         _do_backup("pre-upgrade")
@@ -323,10 +370,11 @@ def upgrade(
 @app.command("downgrade")
 def downgrade(
     revision: str = typer.Argument(..., help="Target revision (-1, base, <id>)."),
-    directory: str = typer.Option("alembic", "--dir", help="Alembic directory."),
+    directory: Optional[str] = typer.Option(None, "--dir", help=_DIR_HELP),
     backup: bool = typer.Option(True, "--backup/--no-backup", "-b", help="Backup database before downgrading."),
 ) -> None:
     """Rollback migrations to the target revision."""
+    directory = directory or get_migration_dir()
     _ensure_initialized(directory)
     if backup:
         _do_backup("pre-downgrade")
@@ -336,9 +384,10 @@ def downgrade(
 @app.command("current")
 def current(
     verbose: bool = typer.Option(False, "--verbose", "-v"),
-    directory: str = typer.Option("alembic", "--dir"),
+    directory: Optional[str] = typer.Option(None, "--dir", help=_DIR_HELP),
 ) -> None:
     """Show the current database revision."""
+    directory = directory or get_migration_dir()
     _ensure_initialized(directory)
     run_alembic_command(directory, lambda cfg: command.current(cfg, verbose=verbose))
 
@@ -346,9 +395,10 @@ def current(
 @app.command("history")
 def history(
     verbose: bool = typer.Option(False, "--verbose", "-v"),
-    directory: str = typer.Option("alembic", "--dir"),
+    directory: Optional[str] = typer.Option(None, "--dir", help=_DIR_HELP),
 ) -> None:
     """Show migration history."""
+    directory = directory or get_migration_dir()
     _ensure_initialized(directory)
     command.history(create_alembic_config(directory), verbose=verbose)
 
@@ -356,9 +406,10 @@ def history(
 @app.command("heads")
 def heads(
     verbose: bool = typer.Option(False, "--verbose", "-v"),
-    directory: str = typer.Option("alembic", "--dir"),
+    directory: Optional[str] = typer.Option(None, "--dir", help=_DIR_HELP),
 ) -> None:
     """Show migration heads."""
+    directory = directory or get_migration_dir()
     _ensure_initialized(directory)
     command.heads(create_alembic_config(directory), verbose=verbose)
 
@@ -366,11 +417,53 @@ def heads(
 @app.command("stamp")
 def stamp(
     revision: str = typer.Argument(..., help="Revision to stamp without running migrations."),
-    directory: str = typer.Option("alembic", "--dir"),
+    directory: Optional[str] = typer.Option(None, "--dir", help=_DIR_HELP),
 ) -> None:
     """Stamp the database at a revision without running migrations."""
+    directory = directory or get_migration_dir()
     _ensure_initialized(directory)
     run_alembic_command(directory, lambda cfg: command.stamp(cfg, revision))
+
+
+@app.command("rename")
+def rename_dir(
+    new_name: str = typer.Argument(..., help="New name for the Alembic directory."),
+    directory: Optional[str] = typer.Option(None, "--dir", help="Current directory name. " + _DIR_HELP),
+) -> None:
+    """Rename the Alembic directory and keep alembic.ini / integration.yaml in sync."""
+    directory = directory or get_migration_dir()
+    _ensure_initialized(directory)
+
+    root = project_root()
+    old_dir = _alembic_dir(directory)
+    new_dir = (root / new_name).resolve()
+
+    if new_dir.exists():
+        console.print(f"[red]Already exists:[/red] [cyan]{new_dir}[/cyan]")
+        raise typer.Exit(1)
+
+    old_dir.rename(new_dir)
+
+    ini_path = root / "alembic.ini"
+    ini_updated = False
+    if ini_path.exists():
+        text = ini_path.read_text(encoding="utf-8")
+        new_text = text.replace(f"script_location = {directory}", f"script_location = {new_name}", 1)
+        if new_text != text:
+            ini_path.write_text(new_text, encoding="utf-8")
+            ini_updated = True
+
+    set_migration_dir(new_name)
+
+    console.print(f"[green]✓[/green] Renamed [cyan]{directory}[/cyan] → [cyan]{new_name}[/cyan]")
+    if ini_updated:
+        console.print(f"[green]✓[/green] Updated [cyan]{ini_path}[/cyan]")
+    elif ini_path.exists():
+        console.print(
+            f"[yellow]⚠[/yellow] Could not find [dim]script_location = {directory}[/dim] in "
+            f"[cyan]{ini_path}[/cyan] — update it by hand."
+        )
+    console.print(f"[green]✓[/green] integration.yaml → [cyan]migration.directory: {new_name}[/cyan]")
 
 
 # ── Backup / Restore ───────────────────────────────────────────
